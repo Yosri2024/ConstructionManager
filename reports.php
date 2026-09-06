@@ -31,11 +31,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 
 if (isset($_GET['delete'])) {
     // Supervisors can only delete their own site's reports
+    $mySiteIdsForDelete = getMySiteIds($user);
     $stmt = $pdo->prepare("SELECT dr.id FROM daily_reports dr JOIN sites s ON s.id = dr.site_id WHERE dr.id = ?");
     $stmt->execute([$_GET['delete']]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$row) { flash('Report not found'); header('Location: reports.php'); exit; }
-    $canDelete = $isManager || in_array($row['site_id'], $mySiteIds);
+    $canDelete = $isManager || in_array($row['site_id'], $mySiteIdsForDelete);
     if (!$canDelete) { flash('Access denied'); header('Location: reports.php'); exit; }
     $pdo->prepare("DELETE FROM daily_reports WHERE id = ?")->execute([$_GET['delete']]);
     flash('Report deleted', 'warning');
@@ -43,7 +44,6 @@ if (isset($_GET['delete'])) {
     exit;
 }
 
-$mySiteIds = getMySiteIds($user);
 $where = []; $params = [];
 if (isset($_GET['site_id']) && $_GET['site_id']) { $where[] = 'dr.site_id = ?'; $params[] = $_GET['site_id']; }
 if ($isSupervisor) { $where[] = 's.id IN (' . siteIdsForSql($mySiteIds) . ')'; }

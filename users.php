@@ -46,7 +46,6 @@ if (isset($_GET['delete'])) {
     if ($delId === $user['id']) { flash('You cannot delete yourself'); header('Location: users.php'); exit; }
     // Cannot delete the last manager
     $remaining = $pdo->query("SELECT COUNT(*) FROM users WHERE role = 'manager'")->fetchColumn();
-    $target = $pdo->prepare("SELECT role FROM users WHERE id = ?")->execute([$delId]);
     $target = $pdo->query("SELECT role FROM users WHERE id = $delId")->fetchColumn();
     if ($target === 'manager' && $remaining <= 1) { flash('Cannot delete the last manager'); header('Location: users.php'); exit; }
     $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$delId]);
