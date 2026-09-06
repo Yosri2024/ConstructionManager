@@ -34,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         $check->execute([$_POST['site_id'], $user['id']]);
         if (!$check->fetch()) { flash('You can only enter hours for your own sites'); header('Location: hours.php'); exit; }
     }
-    $stmt = $pdo->prepare("INSERT INTO work_hours (worker_id, site_id, work_date, hours, overtime_hours, notes, entered_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt = $pdo->prepare("INSERT INTO work_hours (worker_id, site_id, work_date, hours, overtime_hours, notes, entered_by) VALUES (?, ?, ?, ?, ?, ?, ?)");
     $stmt->execute([$_POST['worker_id'], $_POST['site_id'], $_POST['work_date'], (float)$_POST['hours'], (float)($_POST['overtime_hours'] ?? 0), $_POST['notes'] ?? '', $user['id']]);
     flash('Hours recorded successfully');
     header('Location: hours.php');
