@@ -1,0 +1,45 @@
+# ConstructionManager Apache configuration
+Options -Indexes
+
+# Disable directory browsing
+<IfModule mod_dir.c>
+    DirectoryIndex index.php index.html
+</IfModule>
+
+# Set default timezone
+<IfModule mod_php.c>
+    php_value date.timezone "UTC"
+    php_value upload_max_filesize "10M"
+    php_value post_max_size "10M"
+</IfModule>
+
+# Security: prevent access to .env, .git, database files
+<FilesMatch "^\.env">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+<FilesMatch "\.(db|sqlite|sqlite3)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+<FilesMatch "^(config\.local\.php|composer\.(json|lock))$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Force HTTPS (uncomment after getting SSL certificate)
+# <IfModule mod_rewrite.c>
+#     RewriteEngine On
+#     RewriteCond %{HTTPS} off
+#     RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+# </IfModule>
+
+# Pretty URLs (if you want /sites instead of /sites.php in the future)
+# <IfModule mod_rewrite.c>
+#     RewriteEngine On
+#     RewriteCond %{REQUEST_FILENAME} !-f
+#     RewriteCond %{REQUEST_FILENAME} !-d
+#     RewriteRule ^([a-z]+)$ $1.php [L]
+# </IfModule>

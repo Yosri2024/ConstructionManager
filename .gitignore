@@ -1,0 +1,44 @@
+# =============================================================
+# ConstructionManager .gitignore
+# =============================================================
+
+# Database files (local development only)
+/data/*.db
+/data/*.db-journal
+/data/*.db-shm
+/data/*.db-wal
+
+# Environment & secrets
+.env
+.env.local
+config.local.php
+*.local.php
+
+# Logs
+*.log
+debug.log
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# WAMP/XAMPP specific
+wampmanager.conf
+wamp.ini
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*~
+
+# Build artifacts
+/dist/
+/build/

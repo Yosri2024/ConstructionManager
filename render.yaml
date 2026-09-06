@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: construction-manager
+    runtime: php
+    plan: free
+    buildCommand: |
+      echo "Building ConstructionManager"
+    startCommand: |
+      php -S 0.0.0.0:$PORT -t .
+    envVars:
+      - key: DB_MODE
+        value: mysql
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "3306"
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASS
+        sync: false
+      - key: PHP_VERSION
+        value: "8.2"

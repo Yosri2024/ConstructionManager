@@ -1,0 +1,18 @@
+{
+    "name": "yosri2024/construction-manager",
+    "description": "Construction site management system for tracking workers, sites, jobs, attendance, and work hours",
+    "type": "project",
+    "require": {
+        "php": ">=8.0",
+        "ext-pdo": "*",
+        "ext-pdo_sqlite": "*",
+        "ext-pdo_mysql": "*",
+        "ext-json": "*"
+    },
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Yosri2024"
+        }
+    ]
+}

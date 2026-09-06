@@ -4,22 +4,172 @@
 // =============================================================
 session_start();
 
-define('DB_FILE', __DIR__ . '/data/site_management.db');
+// Load local config override if it exists (for local DB credentials etc.)
+if (file_exists(__DIR__ . '/config.local.php')) {
+    require_once __DIR__ . '/config.local.php';
+}
+
+// Load environment variables from .env file if it exists
+function loadEnv($path) {
+    if (!file_exists($path)) return;
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        if (strpos(trim($line), '#') === 0) continue;
+        if (!strpos($line, '=')) continue;
+        list($key, $value) = explode('=', $line, 2);
+        $key = trim($key);
+        $value = trim($value);
+        if (!getenv($key)) {
+            putenv("$key=$value");
+            $_ENV[$key] = $value;
+        }
+    }
+}
+loadEnv(__DIR__ . '/.env');
+
+// Database mode: 'sqlite' (default, local) or 'mysql' (production)
+define('DB_MODE', getenv('DB_MODE') ?: 'sqlite');
+
+if (DB_MODE === 'mysql') {
+    // MySQL configuration (for production / cloud hosting)
+    define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
+    define('DB_PORT', getenv('DB_PORT') ?: '3306');
+    define('DB_NAME', getenv('DB_NAME') ?: 'site_management');
+    define('DB_USER', getenv('DB_USER') ?: 'root');
+    define('DB_PASS', getenv('DB_PASS') ?: '');
+    define('DB_CHARSET', 'utf8mb4');
+} else {
+    // SQLite configuration (for local WAMP/XAMPP development)
+    define('DB_FILE', __DIR__ . '/data/site_management.db');
+}
 
 function getDB() {
     static $pdo = null;
     if ($pdo === null) {
-        $first = !file_exists(DB_FILE);
-        $pdo = new PDO('sqlite:' . DB_FILE);
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $pdo->exec('PRAGMA foreign_keys = ON');
-        if ($first) {
-            initSchema($pdo);
+        if (DB_MODE === 'mysql') {
+            $pdo = connectMySQL();
+            if (DB_FIRST_RUN) {
+                initSchemaMySQL($pdo);
+            }
+            migrateMySQL($pdo);
+        } else {
+            $first = !file_exists(DB_FILE);
+            $pdo = new PDO('sqlite:' . DB_FILE);
+            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $pdo->exec('PRAGMA foreign_keys = ON');
+            if ($first) {
+                initSchema($pdo);
+            }
+            migrate($pdo);
         }
-        // Run migrations on every request
-        migrate($pdo);
     }
     return $pdo;
+}
+
+function connectMySQL() {
+    $dsn = sprintf(
+        'mysql:host=%s;port=%s;dbname=%s;charset=%s',
+        DB_HOST, DB_PORT, DB_NAME, DB_CHARSET
+    );
+    try {
+        $pdo = new PDO($dsn, DB_USER, DB_PASS, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ]);
+        $pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
+        return $pdo;
+    } catch (PDOException $e) {
+        // If database doesn't exist, try to create it
+        if (strpos($e->getMessage(), 'Unknown database') !== false) {
+            $pdoRoot = new PDO(
+                'mysql:host=' . DB_HOST . ';port=' . DB_PORT . ';charset=' . DB_CHARSET,
+                DB_USER, DB_PASS,
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+            );
+            $pdoRoot->exec("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+            $pdoRoot->exec("USE `" . DB_NAME . "`");
+            $pdo = $pdoRoot;
+            $GLOBALS['DB_FIRST_RUN'] = true;
+            return $pdo;
+        }
+        throw $e;
+    }
+}
+
+function initSchemaMySQL($pdo) {
+    // MySQL schema is loaded from database_mysql.sql
+    $sqlFile = __DIR__ . '/database_mysql.sql';
+    if (file_exists($sqlFile)) {
+        $sql = file_get_contents($sqlFile);
+        // Split by semicolons and execute each statement
+        $statements = array_filter(array_map('trim', explode(';', $sql)));
+        foreach ($statements as $stmt) {
+            if (empty($stmt) || strpos($stmt, '--') === 0) continue;
+            try {
+                $pdo->exec($stmt);
+            } catch (Exception $e) {
+                // Log but continue (some statements like USE are not valid via exec)
+                error_log("MySQL init warning: " . $e->getMessage());
+            }
+        }
+    }
+    $GLOBALS['DB_FIRST_RUN'] = false;
+}
+
+function migrateMySQL($pdo) {
+    // Ensure migrations table exists
+    $pdo->exec("CREATE TABLE IF NOT EXISTS _migrations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) UNIQUE NOT NULL,
+        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB");
+
+    // Helper to check if a migration has run
+    $hasMigration = function($name) use ($pdo) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM _migrations WHERE name = ?");
+        $stmt->execute([$name]);
+        return $stmt->fetchColumn() > 0;
+    };
+
+    // MySQL equivalent of site_supervisors sync (runs on every request)
+    $pdo->exec("INSERT IGNORE INTO site_supervisors (site_id, user_id) SELECT id, supervisor_id FROM sites WHERE supervisor_id IS NOT NULL");
+    $pdo->exec("DELETE FROM site_supervisors WHERE site_id NOT IN (SELECT id FROM sites) OR user_id NOT IN (SELECT id FROM users)");
+
+    // Migration: add transfer_requests table
+    if (!$hasMigration('add_transfer_requests')) {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS transfer_requests (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            worker_id INT NOT NULL,
+            from_site_id INT NULL,
+            to_site_id INT NOT NULL,
+            requested_by INT NOT NULL,
+            notes TEXT,
+            status ENUM('pending','approved','rejected') DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            responded_at TIMESTAMP NULL,
+            responded_by INT NULL,
+            FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+            FOREIGN KEY (from_site_id) REFERENCES sites(id) ON DELETE SET NULL,
+            FOREIGN KEY (to_site_id) REFERENCES sites(id) ON DELETE CASCADE,
+            FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (responded_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB");
+        $pdo->prepare("INSERT INTO _migrations (name) VALUES (?)")->execute(['add_transfer_requests']);
+    }
+
+    // Migration: add site_supervisors join table
+    if (!$hasMigration('add_site_supervisors')) {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS site_supervisors (
+            site_id INT NOT NULL,
+            user_id INT NOT NULL,
+            PRIMARY KEY (site_id, user_id),
+            FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB");
+        $pdo->exec("INSERT IGNORE INTO site_supervisors (site_id, user_id) SELECT id, supervisor_id FROM sites WHERE supervisor_id IS NOT NULL");
+        $pdo->prepare("INSERT INTO _migrations (name) VALUES (?)")->execute(['add_site_supervisors']);
+    }
 }
 
 function migrate($pdo) {
