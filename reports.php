@@ -3,23 +3,38 @@ require_once 'config.php';
 requireLogin();
 
 $pdo = getDB();
+$companyId = getCurrentCompanyId();
 $user = currentUser();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
+$mySiteIds = getMySiteIds($user);
 
 if ($isManager) {
-    $sites = $pdo->query("SELECT id, name FROM sites ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
-} else {
-    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE supervisor_id = ? ORDER BY name");
-    $stmt->execute([$user['id']]);
+    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? ORDER BY name");
+    $stmt->execute([$companyId]);
     $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} else {
+    // Supervisor: use allowed site ids (already filtered by company)
+    $mySiteIds = getMySiteIds($user);
+    if (empty($mySiteIds)) {
+        $sites = [];
+    } else {
+        $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
+        $stmt->execute([$companyId]);
+        $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
+    require_csrf();
     if ($isManager) { flash('Only supervisors can submit daily reports'); header('Location: reports.php'); exit; }
+    // Validate site belongs to company and supervisor has access
+    $chkSiteComp = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+    $chkSiteComp->execute([$_POST['site_id'], $companyId]);
+    if (!$chkSiteComp->fetch()) { flash('Invalid site for your company'); header('Location: reports.php'); exit; }
     if ($isSupervisor) {
-        $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND supervisor_id = ?");
-        $check->execute([$_POST['site_id'], $user['id']]);
+        $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ? AND (supervisor_id = ? OR id IN (SELECT site_id FROM site_supervisors WHERE user_id = ?))");
+        $check->execute([$_POST['site_id'], $companyId, $user['id'], $user['id']]);
         if (!$check->fetch()) { flash('Not your site'); header('Location: reports.php'); exit; }
     }
     $stmt = $pdo->prepare("INSERT INTO daily_reports (site_id, supervisor_id, report_date, work_progress, notes, weather, issues) VALUES (?, ?, ?, ?, ?, ?, ?)");
@@ -30,22 +45,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 }
 
 if (isset($_GET['delete'])) {
-    // Supervisors can only delete their own site's reports
+    // Supervisors can only delete their own site's reports, always check company
     $mySiteIdsForDelete = getMySiteIds($user);
-    $stmt = $pdo->prepare("SELECT dr.id FROM daily_reports dr JOIN sites s ON s.id = dr.site_id WHERE dr.id = ?");
-    $stmt->execute([$_GET['delete']]);
+    $stmt = $pdo->prepare("SELECT dr.id, dr.site_id, s.company_id FROM daily_reports dr JOIN sites s ON s.id = dr.site_id WHERE dr.id = ? AND s.company_id = ?");
+    $stmt->execute([$__repDel, $companyId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$row) { flash('Report not found'); header('Location: reports.php'); exit; }
     $canDelete = $isManager || in_array($row['site_id'], $mySiteIdsForDelete);
     if (!$canDelete) { flash('Access denied'); header('Location: reports.php'); exit; }
-    $pdo->prepare("DELETE FROM daily_reports WHERE id = ?")->execute([$_GET['delete']]);
+    $pdo->prepare("DELETE FROM daily_reports WHERE id = ?")->execute([$__repDel]);
     flash('Report deleted', 'warning');
     header('Location: reports.php');
     exit;
 }
 
 $where = []; $params = [];
-if (isset($_GET['site_id']) && $_GET['site_id']) { $where[] = 'dr.site_id = ?'; $params[] = $_GET['site_id']; }
+$where[] = 's.company_id = ?'; $params[] = $companyId;
+if (isset($_GET['site_id']) && $_GET['site_id']) {
+    // Verify site belongs to company
+    $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+    $chk->execute([$_GET['site_id'], $companyId]);
+    if ($chk->fetch()) { $where[] = 'dr.site_id = ?'; $params[] = $_GET['site_id']; }
+}
 if ($isSupervisor) { $where[] = 's.id IN (' . siteIdsForSql($mySiteIds) . ')'; }
 $wSQL = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
@@ -100,6 +121,7 @@ $reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <div class="alert warning">You have no sites assigned. Please contact the manager.</div>
                 <?php else: ?>
                 <form method="POST">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="create">
                     <div class="form-row">
                         <div class="form-group">

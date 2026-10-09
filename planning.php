@@ -3,6 +3,7 @@ require_once 'config.php';
 requireLogin();
 
 $pdo = getDB();
+$companyId = getCurrentCompanyId();
 $user = currentUser();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
@@ -14,30 +15,34 @@ if ($isSupervisor) {
     $siteFilter = " AND s.id IN (" . siteIdsForSql($mySiteIds) . ")";
 }
 
-// Get my sites for the form
+// Get my sites for the form (filtered by company)
 if ($isManager) {
-    $sites = $pdo->query("SELECT id, name FROM sites ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? ORDER BY name");
+    $stmt->execute([$companyId]);
+    $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } else {
-    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
-    $stmt->execute();
+    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
+    $stmt->execute([$companyId]);
     $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-// Upcoming assignments
-$upcoming = $pdo->query("
+// Upcoming assignments - filtered by company
+$upcoming = $pdo->prepare("
     SELECT a.*, w.first_name || ' ' || w.last_name as worker_name, s.name as site_name
     FROM assignments a
-    JOIN workers w ON w.id = a.worker_id
-    JOIN sites s ON s.id = a.site_id
+    JOIN workers w ON w.id = a.worker_id AND w.company_id = ?
+    JOIN sites s ON s.id = a.site_id AND s.company_id = ?
     WHERE (a.end_date IS NULL OR DATE(a.end_date) >= DATE('now'))
     $siteFilter
     ORDER BY a.start_date ASC
-")->fetchAll(PDO::FETCH_ASSOC);
+");
+$upcoming->execute([$companyId, $companyId]);
+$upcoming = $upcoming->fetchAll(PDO::FETCH_ASSOC);
 
-// Available workers (manager sees all, supervisor sees their site workers)
+// Available workers (manager sees all of company, supervisor sees their site workers)
 $availSQL = "
     SELECT * FROM workers
-    WHERE status != 'inactive'
+    WHERE company_id = $companyId AND status != 'inactive'
     AND (current_site_id IS NULL OR id NOT IN (SELECT worker_id FROM assignments WHERE end_date IS NULL))
 ";
 if ($isSupervisor) {
@@ -45,14 +50,15 @@ if ($isSupervisor) {
 }
 $availableWorkers = $pdo->query($availSQL)->fetchAll(PDO::FETCH_ASSOC);
 
-// Site capacity
+// Site capacity - filtered by company
 $capSQL = "
     SELECT s.id, s.name,
         (SELECT COUNT(*) FROM assignments a WHERE a.site_id = s.id AND (a.end_date IS NULL OR DATE(a.end_date) >= DATE('now'))) as active_count,
         (SELECT COUNT(*) FROM assignments a WHERE a.site_id = s.id) as total_count
     FROM sites s
+    WHERE s.company_id = $companyId
 ";
-if ($isSupervisor) $capSQL .= " WHERE s.id IN (" . siteIdsForSql($mySiteIds) . ")";
+if ($isSupervisor) $capSQL .= " AND s.id IN (" . siteIdsForSql($mySiteIds) . ")";
 $capSQL .= " ORDER BY s.name";
 $cap = $pdo->query($capSQL)->fetchAll(PDO::FETCH_ASSOC);
 ?>

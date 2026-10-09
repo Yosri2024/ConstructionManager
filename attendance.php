@@ -6,36 +6,55 @@ requireLogin();
 if (isset($_GET['__poll'])) {
     header('Content-Type: application/json');
     $pdo = getDB();
+    // Need company id from session if available
+    $cid = $_SESSION['company_id'] ?? 0;
     $today = date('Y-m-d');
-    $count = (int)$pdo->query("SELECT COUNT(*) FROM attendance WHERE attendance_date = '$today'")->fetchColumn();
+    if ($cid) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM attendance a JOIN workers w ON w.id = a.worker_id WHERE w.company_id = ? AND a.attendance_date = ?");
+        $stmt->execute([$cid, $today]);
+        $count = (int)$stmt->fetchColumn();
+    } else {
+        $count = (int)$pdo->query("SELECT COUNT(*) FROM attendance WHERE attendance_date = '$today'")->fetchColumn();
+    }
     echo json_encode(['count' => $count, 'time' => time()]);
     exit;
 }
 
 $pdo = getDB();
 $user = currentUser();
+$companyId = getCurrentCompanyId();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
 
 $mySiteIds = $isManager ? [] : getMySiteIds($user);
 
 if ($isManager) {
-    $sites = $pdo->query("SELECT id, name FROM sites ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
-    $workers = $pdo->query("SELECT id, first_name || ' ' || last_name as name, current_site_id FROM workers ORDER BY last_name")->fetchAll(PDO::FETCH_ASSOC);
+    $sites = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? ORDER BY name");
+    $sites->execute([$companyId]);
+    $sites = $sites->fetchAll(PDO::FETCH_ASSOC);
+    $workers = $pdo->prepare("SELECT id, first_name || ' ' || last_name as name, current_site_id FROM workers WHERE company_id = ? ORDER BY last_name");
+    $workers->execute([$companyId]);
+    $workers = $workers->fetchAll(PDO::FETCH_ASSOC);
 } else {
-    // Supervisor: only their own sites (via site_supervisors + legacy supervisor_id)
-    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
-    $stmt->execute();
-    $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    // Supervisor: only workers assigned to their own sites
-    $stmt = $pdo->prepare("SELECT id, first_name || ' ' || last_name as name, current_site_id FROM workers WHERE current_site_id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY last_name");
-    $stmt->execute();
-    $workers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Supervisor: only their own sites (via site_supervisors + legacy supervisor_id) filtered by company
+    if (empty($mySiteIds)) {
+        $sites = [];
+        $workers = [];
+    } else {
+        $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
+        $stmt->execute([$companyId]);
+        $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        // Supervisor: only workers assigned to their own sites
+        $stmt = $pdo->prepare("SELECT id, first_name || ' ' || last_name as name, current_site_id FROM workers WHERE company_id = ? AND current_site_id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY last_name");
+        $stmt->execute([$companyId]);
+        $workers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 }
 
 $jobCodes = getJobCodes();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
+    require_csrf();
     if ($isManager) { flash('Only supervisors can mark attendance'); header('Location: attendance.php'); exit; }
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ")");
@@ -50,6 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
+    require_csrf();
     if ($isManager) { flash('Only supervisors can edit attendance'); header('Location: attendance.php'); exit; }
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT a.id FROM attendance a JOIN sites s ON s.id = a.site_id WHERE a.id = ? AND s.id IN (" . siteIdsForSql($mySiteIds) . ")");
@@ -67,10 +87,10 @@ if (isset($_GET['delete'])) {
     if ($isManager) { flash('Only supervisors can delete attendance records'); header('Location: attendance.php'); exit; }
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT a.id FROM attendance a JOIN sites s ON s.id = a.site_id WHERE a.id = ? AND s.id IN (" . siteIdsForSql($mySiteIds) . ")");
-        $check->execute([$_GET['delete']]);
+        $check->execute([$__aid]);
         if (!$check->fetch()) { flash('Not your site'); header('Location: attendance.php'); exit; }
     }
-    $pdo->prepare("DELETE FROM attendance WHERE id = ?")->execute([$_GET['delete']]);
+    $pdo->prepare("DELETE FROM attendance WHERE id = ?")->execute([$__aid]);
     flash('Entry removed', 'warning');
     header('Location: attendance.php');
     exit;
@@ -89,6 +109,9 @@ if (isset($_GET['edit'])) {
 }
 
 $where = []; $params = [];
+// Always filter by company
+$where[] = 's.company_id = ?'; $params[] = $companyId;
+$where[] = 'w.company_id = ?'; $params[] = $companyId;
 if (isset($_GET['site_id']) && $_GET['site_id']) { $where[] = 'a.site_id = ?'; $params[] = $_GET['site_id']; }
 if (isset($_GET['date']) && $_GET['date']) { $where[] = 'a.attendance_date = ?'; $params[] = $_GET['date']; }
 if (isset($_GET['job_code']) && $_GET['job_code']) { $where[] = 's.job_code = ?'; $params[] = $_GET['job_code']; }
@@ -102,7 +125,7 @@ $today = date('Y-m-d');
 $currentTime = date('H:i');
 $currentDateTime = date('l, F d, Y - H:i');
 
-// Query 1: Get today's attendance summary (all workers and their status for today)
+// Query 1: Get today's attendance summary (all workers and their status for today) - filtered by company
 // Sort by status: present -> late -> absent -> sick -> unmarked
 $todaySQL = "SELECT w.id, w.first_name || ' ' || w.last_name as worker_name,
              s.name as site_name, s.id as site_id, s.job_code, a.status, a.notes, a.id as attendance_id,
@@ -115,10 +138,11 @@ $todaySQL = "SELECT w.id, w.first_name || ' ' || w.last_name as worker_name,
                  ELSE 6
              END as status_order
              FROM workers w
-             JOIN sites s ON s.id = w.current_site_id
-             LEFT JOIN attendance a ON a.worker_id = w.id AND a.attendance_date = ? AND a.site_id = s.id";
+             JOIN sites s ON s.id = w.current_site_id AND s.company_id = $companyId
+             LEFT JOIN attendance a ON a.worker_id = w.id AND a.attendance_date = ? AND a.site_id = s.id
+             WHERE w.company_id = $companyId";
 if ($isSupervisor) {
-    $todaySQL .= " WHERE w.current_site_id IN (" . siteIdsForSql($mySiteIds) . ")";
+    $todaySQL .= " AND w.current_site_id IN (" . siteIdsForSql($mySiteIds) . ")";
 }
 $todaySQL .= " ORDER BY status_order, s.name, w.last_name, w.first_name";
 $stmt = $pdo->prepare($todaySQL);
@@ -194,6 +218,7 @@ foreach ($rows as $r) {
                     <div class="alert warning">You have no sites assigned.</div>
                 <?php else: ?>
                 <form method="POST">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-row-3">

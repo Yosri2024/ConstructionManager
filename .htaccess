@@ -1,45 +1,112 @@
-# ConstructionManager Apache configuration
+# ConstructionManager Apache configuration - HARDENED
 Options -Indexes
 
-# Disable directory browsing
+# Disable directory browsing everywhere
+<IfModule mod_autoindex.c>
+    IndexIgnore *
+</IfModule>
+
 <IfModule mod_dir.c>
     DirectoryIndex index.php index.html
 </IfModule>
 
-# Set default timezone
+# PHP settings (only if mod_php is used; InfinityFree uses suphp/fcgid so these may be ignored)
 <IfModule mod_php.c>
+    php_flag display_errors Off
+    php_flag log_errors On
+    php_value error_log "data/php_errors.log"
     php_value date.timezone "UTC"
     php_value upload_max_filesize "10M"
     php_value post_max_size "10M"
+    php_value session.cookie_httponly 1
+    php_value session.cookie_secure 1
+    php_value session.use_strict_mode 1
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag display_errors Off
 </IfModule>
 
-# Security: prevent access to .env, .git, database files
+# ========== Security Headers ==========
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    # HSTS - only if HTTPS (InfinityFree .rf.gd already has SSL; safe to send)
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains" env=HTTPS
+    # Prevent MIME sniffing + clickjacking via CSP fallback
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data: https:; connect-src 'self' https://ipapi.co https://cdn.jsdelivr.net;"
+</IfModule>
+
+# ========== Block sensitive files ==========
+# .env, .htaccess, .git, .sql, .log, .bak, .ini, .swp, composer, etc.
 <FilesMatch "^\.env">
-    Order allow,deny
-    Deny from all
+    Require all denied
+</FilesMatch>
+<FilesMatch "^\.ht">
+    Require all denied
+</FilesMatch>
+<FilesMatch "^\.git">
+    Require all denied
+</FilesMatch>
+<FilesMatch "\.(env|sql|log|bak|backup|old|orig|save|swp|swo|ini|dist)$">
+    Require all denied
+</FilesMatch>
+<FilesMatch "^(config\.local\.php|composer\.(json|lock)|Procfile|render\.yaml|report\.txt|debug\.log|database_mysql\.sql)$">
+    Require all denied
+</FilesMatch>
+# Block backup copies like config.php.bak_singleton, *.bak.php
+<FilesMatch "\.bak">
+    Require all denied
 </FilesMatch>
 
-<FilesMatch "\.(db|sqlite|sqlite3)$">
-    Order allow,deny
-    Deny from all
+# Block access to data/ directory (sqlite db is there)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Block direct access to data/*.db, *.log
+    RewriteRule ^data/ - [F,L]
+    # Block hidden files
+    RewriteRule /?\.(git|env|htaccess|htpasswd) - [F,L]
+</IfModule>
+
+# Deny access to data folder via FilesMatch fallback (if mod_rewrite disabled)
+<IfModule mod_authz_core.c>
+    <DirectoryMatch "^.*/data/">
+        Require all denied
+    </DirectoryMatch>
+</IfModule>
+
+# Also protect via .htaccess in data/ -> will create separate file
+# Prevent PHP execution in data/ (defense in depth if attacker uploads)
+<FilesMatch "\.(php|php5|php7|php8|phtml|phar)$">
+    # Allow PHP in root, but block if requested under /data
+    # This rule is overridden by data/.htaccess below for extra safety
 </FilesMatch>
 
-<FilesMatch "^(config\.local\.php|composer\.(json|lock))$">
-    Order allow,deny
-    Deny from all
+# Deny access to backup/extensions even if renamed
+<FilesMatch "\.(bak|backup|old|orig|save|tmp|temp)$">
+    Require all denied
 </FilesMatch>
 
-# Force HTTPS (uncomment after getting SSL certificate)
-# <IfModule mod_rewrite.c>
-#     RewriteEngine On
-#     RewriteCond %{HTTPS} off
-#     RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-# </IfModule>
+# Protect against common exploits
+<IfModule mod_rewrite.c>
+    RewriteCond %{QUERY_STRING} (\.\.\/|\.\.\\|%2e%2e%2f) [NC,OR]
+    RewriteCond %{QUERY_STRING} (base64_encode|localhost|mosConfig) [NC,OR]
+    RewriteCond %{QUERY_STRING} (<|%3C).*script.*(>|%3E) [NC]
+    RewriteCond %{QUERY_STRING} GLOBALS(=|\[|\%[0-9A-Z]{0,2}) [OR]
+    RewriteCond %{QUERY_STRING} _REQUEST(=|\[|\%[0-9A-Z]{0,2})
+    RewriteRule .* - [F,L]
+</IfModule>
 
-# Pretty URLs (if you want /sites instead of /sites.php in the future)
-# <IfModule mod_rewrite.c>
-#     RewriteEngine On
-#     RewriteCond %{REQUEST_FILENAME} !-f
-#     RewriteCond %{REQUEST_FILENAME} !-d
-#     RewriteRule ^([a-z]+)$ $1.php [L]
-# </IfModule>
+# Compression & caching (performance)
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 month"
+    ExpiresByType application/javascript "access plus 1 month"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/jpeg "access plus 1 month"
+</IfModule>
+
+# Disable server signature
+ServerSignature Off

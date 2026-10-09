@@ -4,13 +4,18 @@ $currentPage = basename($_SERVER['PHP_SELF'], '.php');
 $user = currentUser();
 $isManager = ($user['role'] ?? '') === 'manager';
 
-// Pending transfer request count (only relevant for manager)
+$company = currentCompany();
+$companyId = getCurrentCompanyId();
+// Pending transfer request count (only relevant for manager, filtered by company via requested_by user)
 $pendingTransferCount = 0;
 if ($isManager) {
     try {
-        $pendingTransferCount = (int)getDB()
-            ->query("SELECT COUNT(*) FROM transfer_requests WHERE status = 'pending'")
-            ->fetchColumn();
+        $pdoTmp = getDB();
+        $companyIdTmp = $companyId;
+        // Count pending transfers where requested_by belongs to same company
+        $stmt = $pdoTmp->prepare("SELECT COUNT(*) FROM transfer_requests tr JOIN users u ON u.id = tr.requested_by WHERE tr.status = 'pending' AND u.company_id = ?");
+        $stmt->execute([$companyIdTmp]);
+        $pendingTransferCount = (int)$stmt->fetchColumn();
     } catch (Exception $e) {
         $pendingTransferCount = 0;
     }
@@ -21,11 +26,16 @@ if ($isManager) {
 <div class="sidebar" id="mainSidebar">
     <div class="sidebar-header">
         <div class="logo">🏗️</div>
-        <h2>Site Manager</h2>
+        <h2><?= h($company['name'] ?? 'Site Manager') ?></h2>
         <div class="user-name">
             <?= h($user['full_name'] ?? '') ?><br>
-            <span style="font-size:10px;color:#9ca3af;"><?= ucfirst($user['role'] ?? '') ?></span>
+            <span style="font-size:10px;color:#9ca3af;"><?= ucfirst($user['role'] ?? '') ?> • <?= h($company['slug'] ?? '') ?></span>
         </div>
+        <?php if (!empty($company['name'])): ?>
+        <div style="font-size:11px;color:#cbd5e1;margin-top:6px;padding:4px 8px;background:rgba(255,255,255,0.08);border-radius:6px;text-align:center;">
+            🏢 <?= h($company['name']) ?>
+        </div>
+        <?php endif; ?>
     </div>
     <nav class="sidebar-nav">
         <div class="nav-section">Main</div>

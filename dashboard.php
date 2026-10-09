@@ -6,35 +6,50 @@ $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
 
 $pdo = getDB();
+$companyId = getCurrentCompanyId();
 $mySiteIds = getMySiteIds($user);
-$siteFilterSql = $isManager ? '' : 'WHERE id IN (' . siteIdsForSql($mySiteIds) . ')';
+// Build company filter for sites table (id column)
+if ($isManager) {
+    $siteFilterSql = "WHERE company_id = $companyId";
+} else {
+    $siteFilterSql = "WHERE company_id = $companyId AND id IN (" . siteIdsForSql($mySiteIds) . ")";
+}
 
-// Get stats (supervisor sees only their sites)
-$stats['jobs'] = $isManager ? $pdo->query("SELECT COUNT(*) FROM jobs")->fetchColumn() : '-';
+// Get stats (supervisor sees only their sites, both filtered by company)
+$stats['jobs'] = $isManager ? $pdo->query("SELECT COUNT(*) FROM jobs WHERE company_id = $companyId")->fetchColumn() : '-';
 $stats['sites'] = $pdo->query("SELECT COUNT(*) FROM sites $siteFilterSql")->fetchColumn();
 $stats['workers'] = $isManager
-    ? $pdo->query("SELECT COUNT(*) FROM workers")->fetchColumn()
-    : $pdo->query("SELECT COUNT(*) FROM workers WHERE current_site_id IN (" . siteIdsForSql($mySiteIds) . ")")->fetchColumn();
-$hoursFilter = $isManager ? '' : 'WHERE site_id IN (' . siteIdsForSql($mySiteIds) . ')';
-$stats['total_hours'] = $pdo->query("SELECT COALESCE(SUM(hours), 0) FROM work_hours $hoursFilter")->fetchColumn();
-$repFilter = $isManager ? '' : 'WHERE site_id IN (' . siteIdsForSql($mySiteIds) . ')';
-$stats['pending_reports'] = $pdo->query("SELECT COUNT(*) FROM daily_reports $repFilter" . ($repFilter ? ' AND' : 'WHERE') . " DATE(report_date) = DATE('now')")->fetchColumn();
-$asgnFilter = $isManager ? '' : 'WHERE site_id IN (' . siteIdsForSql($mySiteIds) . ')';
-$stats['active_assignments'] = $pdo->query("SELECT COUNT(*) FROM assignments $asgnFilter" . ($asgnFilter ? ' AND' : 'WHERE') . " (end_date IS NULL OR end_date >= DATE('now'))")->fetchColumn();
+    ? $pdo->query("SELECT COUNT(*) FROM workers WHERE company_id = $companyId")->fetchColumn()
+    : $pdo->query("SELECT COUNT(*) FROM workers WHERE company_id = $companyId AND current_site_id IN (" . siteIdsForSql($mySiteIds) . ")")->fetchColumn();
+if ($isManager) {
+    $hoursFilter = "WHERE s.company_id = $companyId";
+    $repFilter = "WHERE s.company_id = $companyId";
+    $asgnFilter = "WHERE s.company_id = $companyId";
+} else {
+    $hoursFilter = 'WHERE s.company_id = ' . $companyId . ' AND wh.site_id IN (' . siteIdsForSql($mySiteIds) . ')';
+    $repFilter = 'WHERE s.company_id = ' . $companyId . ' AND dr.site_id IN (' . siteIdsForSql($mySiteIds) . ')';
+    $asgnFilter = 'WHERE s.company_id = ' . $companyId . ' AND a.site_id IN (' . siteIdsForSql($mySiteIds) . ')';
+}
+// For aggregate queries without join, we need to handle differently - use company filter via subquery or direct
+// total_hours via work_hours join sites to filter company
+$stats['total_hours'] = $pdo->query("SELECT COALESCE(SUM(wh.hours),0) FROM work_hours wh JOIN sites s ON s.id = wh.site_id " . ($isManager ? "WHERE s.company_id = $companyId" : $hoursFilter))->fetchColumn();
+$stats['pending_reports'] = $pdo->query("SELECT COUNT(*) FROM daily_reports dr JOIN sites s ON s.id = dr.site_id " . ($isManager ? "WHERE s.company_id = $companyId AND DATE(dr.report_date)=DATE('now')" : $repFilter . " AND DATE(dr.report_date)=DATE('now')"))->fetchColumn();
+$stats['active_assignments'] = $pdo->query("SELECT COUNT(*) FROM assignments a JOIN sites s ON s.id = a.site_id " . ($isManager ? "WHERE s.company_id = $companyId AND (a.end_date IS NULL OR a.end_date >= DATE('now'))" : $asgnFilter . " AND (a.end_date IS NULL OR a.end_date >= DATE('now'))"))->fetchColumn();
 
-// Recent hours entries (filtered by site for supervisor)
+// Recent hours entries (filtered by site for supervisor, always by company)
 $hoursSql = $isManager ? "
     SELECT wh.*, w.first_name || ' ' || w.last_name as worker_name, s.name as site_name
     FROM work_hours wh
     JOIN workers w ON w.id = wh.worker_id
     JOIN sites s ON s.id = wh.site_id
+    WHERE s.company_id = $companyId
     ORDER BY wh.created_at DESC LIMIT 10
 " : "
     SELECT wh.*, w.first_name || ' ' || w.last_name as worker_name, s.name as site_name
     FROM work_hours wh
     JOIN workers w ON w.id = wh.worker_id
     JOIN sites s ON s.id = wh.site_id
-    WHERE s.id IN (" . siteIdsForSql($mySiteIds) . ")
+    WHERE s.company_id = $companyId AND s.id IN (" . siteIdsForSql($mySiteIds) . ")
     ORDER BY wh.created_at DESC LIMIT 10
 ";
 $recentHours = $pdo->query($hoursSql)->fetchAll(PDO::FETCH_ASSOC);
@@ -45,14 +60,14 @@ $repSql = $isManager ? "
     FROM daily_reports dr
     JOIN sites s ON s.id = dr.site_id
     JOIN users u ON u.id = dr.supervisor_id
-    WHERE DATE(dr.report_date) = DATE('now')
+    WHERE s.company_id = $companyId AND DATE(dr.report_date) = DATE('now')
     ORDER BY dr.created_at DESC
 " : "
     SELECT dr.*, s.name as site_name, u.full_name as supervisor_name
     FROM daily_reports dr
     JOIN sites s ON s.id = dr.site_id
     JOIN users u ON u.id = dr.supervisor_id
-    WHERE s.id IN (" . siteIdsForSql($mySiteIds) . ") AND DATE(dr.report_date) = DATE('now')
+    WHERE s.company_id = $companyId AND s.id IN (" . siteIdsForSql($mySiteIds) . ") AND DATE(dr.report_date) = DATE('now')
     ORDER BY dr.created_at DESC
 ";
 $todayReports = $pdo->query($repSql)->fetchAll(PDO::FETCH_ASSOC);
@@ -63,14 +78,14 @@ $asgnSql = $isManager ? "
     FROM assignments a
     JOIN workers w ON w.id = a.worker_id
     JOIN sites s ON s.id = a.site_id
-    WHERE DATE(a.start_date) >= DATE('now', '-3 days') AND DATE(a.start_date) <= DATE('now', '+7 days')
+    WHERE s.company_id = $companyId AND DATE(a.start_date) >= DATE('now', '-3 days') AND DATE(a.start_date) <= DATE('now', '+7 days')
     ORDER BY a.start_date ASC LIMIT 10
 " : "
     SELECT a.*, w.first_name || ' ' || w.last_name as worker_name, s.name as site_name
     FROM assignments a
     JOIN workers w ON w.id = a.worker_id
     JOIN sites s ON s.id = a.site_id
-    WHERE s.id IN (" . siteIdsForSql($mySiteIds) . ")
+    WHERE s.company_id = $companyId AND s.id IN (" . siteIdsForSql($mySiteIds) . ")
       AND DATE(a.start_date) >= DATE('now', '-3 days') AND DATE(a.start_date) <= DATE('now', '+7 days')
     ORDER BY a.start_date ASC LIMIT 10
 ";
@@ -110,6 +125,7 @@ $upcomingAssignments = $pdo->query($asgnSql)->fetchAll(PDO::FETCH_ASSOC);
             <?php endif; ?>
         </div>
 
+        
         <?php if ($isManager): ?>
         <!-- Manager Stats -->
         <div class="stats-grid">

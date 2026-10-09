@@ -345,7 +345,34 @@ td.actions {
 }
 .form-group input:focus,
 .form-group select:focus,
-.form-group textarea:focus { outline: none; border-color: #2563eb; }
+.form-group textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+
+/* — CUSTOM CURSOR & CARET when clicking to write — */
+* { caret-color: #2563eb; }
+.form-group input,
+.form-group textarea,
+.form-group select,
+.iti input {
+    cursor: text;
+}
+.form-group input:focus,
+.form-group textarea:focus,
+.iti input:focus {
+    caret-color: #2563eb;
+    cursor: text;
+    /* replaced cursor: blue I-beam + subtle glow */
+}
+.form-group input:hover,
+.form-group textarea:hover {
+    cursor: text;
+}
+/* Optional: custom pen cursor on focus (uncomment to use image) */
+/*
+.form-group input:focus {
+    cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'><path d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/></svg>") 2 20, text;
+}
+*/
+::selection { background: #dbeafe; color: #1e40af; }
 
 .form-row { display: flex; gap: 12px; }
 .form-row > .form-group { flex: 1; }

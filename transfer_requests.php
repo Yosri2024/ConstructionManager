@@ -3,6 +3,7 @@ require_once 'config.php';
 requireLogin();
 
 $pdo = getDB();
+$companyId = getCurrentCompanyId();
 $user = currentUser();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
@@ -11,9 +12,9 @@ $mySiteIds = $isManager ? [] : getMySiteIds($user);
 // Approve action — MANAGER ONLY
 if (isset($_GET['approve'])) {
     if (!$isManager) { flash('Access denied'); header('Location: transfer_requests.php'); exit; }
-    $reqId = (int)$_GET['approve'];
-    $stmt = $pdo->prepare("SELECT * FROM transfer_requests WHERE id = ? AND status = 'pending'");
-    $stmt->execute([$reqId]);
+    
+    $stmt = $pdo->prepare("SELECT tr.* FROM transfer_requests tr JOIN users u ON u.id = tr.requested_by WHERE tr.id = ? AND tr.status = 'pending' AND u.company_id = ?");
+    $stmt->execute([$reqId, $companyId]);
     $req = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($req) {
@@ -45,9 +46,9 @@ if (isset($_GET['approve'])) {
 // Reject action — MANAGER ONLY
 if (isset($_GET['reject'])) {
     if (!$isManager) { flash('Access denied'); header('Location: transfer_requests.php'); exit; }
-    $reqId = (int)$_GET['reject'];
-    $stmt = $pdo->prepare("SELECT * FROM transfer_requests WHERE id = ? AND status = 'pending'");
-    $stmt->execute([$reqId]);
+    
+    $stmt = $pdo->prepare("SELECT tr.* FROM transfer_requests tr JOIN users u ON u.id = tr.requested_by WHERE tr.id = ? AND tr.status = 'pending' AND u.company_id = ?");
+    $stmt->execute([$reqId, $companyId]);
     $req = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($req) {
@@ -59,15 +60,20 @@ if (isset($_GET['reject'])) {
     exit;
 }
 
-// Filters
+// Filters - always restrict to current company via requested_by user
 $filter = $_GET['filter'] ?? 'pending';
 $where = [];
 $params = [];
+$where[] = "rb.company_id = $companyId";
 
 if ($isSupervisor) {
     $where[] = 'tr.to_site_id IN (' . siteIdsForSql($mySiteIds) . ')';
 } else {
     if (isset($_GET['site_id']) && $_GET['site_id']) {
+        // Ensure site belongs to company
+        $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+        $chk->execute([(int)$_GET['site_id'], $companyId]);
+        if (!$chk->fetch()) { flash('Invalid site'); header('Location: transfer_requests.php'); exit; }
         $where[] = '(tr.to_site_id = ? OR tr.from_site_id = ?)';
         $params[] = (int)$_GET['site_id'];
         $params[] = (int)$_GET['site_id'];
@@ -101,11 +107,12 @@ $stmt = $pdo->prepare("
 $stmt->execute($params);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Counts for tabs
+// Counts for tabs - filtered by company
 $countSQL = "
     SELECT tr.status, COUNT(*) as cnt
     FROM transfer_requests tr
-    " . ($isSupervisor ? "WHERE tr.to_site_id IN (" . siteIdsForSql($mySiteIds) . ")" : "") . "
+    JOIN users rb ON rb.id = tr.requested_by
+    WHERE rb.company_id = $companyId " . ($isSupervisor ? "AND tr.to_site_id IN (" . siteIdsForSql($mySiteIds) . ")" : "") . "
     GROUP BY tr.status
 ";
 $counts = ['pending' => 0, 'approved' => 0, 'rejected' => 0];
@@ -213,8 +220,16 @@ foreach ($pdo->query($countSQL) as $r) {
                             <td class="actions">
                                 <?php if ($r['status'] === 'pending' && $isManager): ?>
                                     <div class="actions-stack">
-                                        <a href="?approve=<?= $r['id'] ?>" class="btn btn-sm btn-approve" onclick="return confirm('Approve transfer? The worker will be moved to this site.');">✓ Approve</a>
-                                        <a href="?reject=<?= $r['id'] ?>" class="btn btn-sm btn-reject" onclick="return confirm('Reject this transfer request?');">✗ Reject</a>
+                                        <form method="POST" style="display:inline">
+                                            <?= csrf_field() ?>
+                                            <input type="hidden" name="approve" value="<?= $r['id'] ?>">
+                                            <button class="btn btn-sm btn-approve" onclick="return confirm('Approve transfer? The worker will be moved to this site.')">✓ Approve</button>
+                                        </form>
+                                        <form method="POST" style="display:inline">
+                                            <?= csrf_field() ?>
+                                            <input type="hidden" name="reject" value="<?= $r['id'] ?>">
+                                            <button class="btn btn-sm btn-reject" onclick="return confirm('Reject this transfer request?')">✗ Reject</button>
+                                        </form>
                                     </div>
                                 <?php else: ?>
                                 <span style="color:#9ca3af;font-size:11px">—</span>

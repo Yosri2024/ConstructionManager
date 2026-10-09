@@ -4,6 +4,7 @@ requireLogin();
 
 $pdo = getDB();
 $user = currentUser();
+$companyId = getCurrentCompanyId();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
 $mySiteIds = $isManager ? [] : getMySiteIds($user);
@@ -18,7 +19,7 @@ if ($isManager) {
         FROM workers w
         LEFT JOIN sites s ON s.id = w.current_site_id
         LEFT JOIN users u ON u.id = s.supervisor_id
-        WHERE w.status = 'available'
+        WHERE w.status = 'available' AND w.company_id = $companyId
         ORDER BY w.last_name, w.first_name
     ")->fetchAll(PDO::FETCH_ASSOC);
     $myWorkers = [];
@@ -32,7 +33,7 @@ if ($isManager) {
         FROM workers w
         LEFT JOIN sites s ON s.id = w.current_site_id
         LEFT JOIN users u ON u.id = s.supervisor_id
-        WHERE w.status = 'available'
+        WHERE w.status = 'available' AND w.company_id = $companyId
         ORDER BY w.last_name, w.first_name
     ");
     $stmt->execute();
@@ -52,7 +53,7 @@ if ($isManager) {
 }
 
 // All active sites for the assignment dropdown
-$allSites = $pdo->query("SELECT id, name, status FROM sites ORDER BY status, name")->fetchAll(PDO::FETCH_ASSOC);
+$allSites = $pdo->query("SELECT id, name, status FROM sites WHERE company_id = $companyId ORDER BY status, name")->fetchAll(PDO::FETCH_ASSOC);
 // Filter to only sites the current user can assign to
 if ($isManager) {
     $sites = $allSites;
@@ -62,13 +63,16 @@ if ($isManager) {
     }));
 }
 
-// Get pending transfer requests so we can show which workers already have one
-$pendingRows = $pdo->query("
+// Get pending transfer requests so we can show which workers already have one (filtered by company)
+$pendingRows = $pdo->prepare("
     SELECT tr.worker_id, tr.to_site_id, s.name as to_site_name
     FROM transfer_requests tr
     JOIN sites s ON s.id = tr.to_site_id
-    WHERE tr.status = 'pending'
-")->fetchAll(PDO::FETCH_ASSOC);
+    JOIN users u ON u.id = tr.requested_by
+    WHERE tr.status = 'pending' AND u.company_id = ?
+");
+$pendingRows->execute([$companyId]);
+$pendingRows = $pendingRows->fetchAll(PDO::FETCH_ASSOC);
 $pendingByWorker = [];
 foreach ($pendingRows as $pr) {
     $pendingByWorker[$pr['worker_id']] = $pr['to_site_name'];
@@ -76,6 +80,7 @@ foreach ($pendingRows as $pr) {
 
 // Submit transfer request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assign') {
+    require_csrf();
     $workerId = (int)$_POST['worker_id'];
     $toSiteId = (int)$_POST['site_id'];
     $notes = trim($_POST['notes'] ?? '');
@@ -89,13 +94,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assig
 
     // Validate: supervisor can only request to their own sites
     if ($isSupervisor) {
-        $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ")");
+        $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = $companyId AND id IN (" . siteIdsForSql($mySiteIds) . ")");
         $check->execute([$toSiteId]);
         if (!$check->fetch()) { flash('Access denied'); header('Location: available_workers.php'); exit; }
     }
 
     // Get worker's current site
-    $wStmt = $pdo->prepare("SELECT current_site_id FROM workers WHERE id = ?");
+    $wStmt = $pdo->prepare("SELECT current_site_id FROM workers WHERE id = ? AND company_id = $companyId");
     $wStmt->execute([$workerId]);
     $w = $wStmt->fetch(PDO::FETCH_ASSOC);
     $fromSiteId = $w ? $w['current_site_id'] : null;
@@ -201,6 +206,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assig
                                     </span>
                                 <?php else: ?>
                                 <form method="POST" class="form-row-inline">
+                    <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="assign">
                                     <input type="hidden" name="worker_id" value="<?= $w['id'] ?>">
                                     <select name="site_id" required class="transfer-select">
@@ -264,6 +270,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assig
                                     </span>
                                 <?php else: ?>
                                 <form method="POST" class="form-row-inline">
+                    <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="assign">
                                     <input type="hidden" name="worker_id" value="<?= $w['id'] ?>">
                                     <select name="site_id" required class="transfer-select">
@@ -326,6 +333,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assig
                                     </span>
                                 <?php else: ?>
                                 <form method="POST" class="form-row-inline">
+                    <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="assign">
                                     <input type="hidden" name="worker_id" value="<?= $w['id'] ?>">
                                     <select name="site_id" required class="transfer-select">

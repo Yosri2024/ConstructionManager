@@ -6,33 +6,59 @@ $pdo = getDB();
 $user = currentUser();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
+$companyId = getCurrentCompanyId();
 
-// Get sites the user can see
+// Get sites the user can see (filtered by company)
 if ($isManager) {
-    $sites = $pdo->query("SELECT id, name FROM sites ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
-} else {
-    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE supervisor_id = ? ORDER BY name");
-    $stmt->execute([$user['id']]);
+    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? ORDER BY name");
+    $stmt->execute([$companyId]);
     $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} else {
+    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? AND supervisor_id = ? ORDER BY name");
+    $stmt->execute([$companyId, $user['id']]);
+    $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Also include sites via site_supervisors for supervisor (already handled via getMySiteIds), but keep simple: use getMySiteIds
+    // For supervisor, use getMySiteIds to get all allowed sites
+    $myIds = getMySiteIds($user);
+    if (!empty($myIds)) {
+        $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? AND id IN (" . siteIdsForSql($myIds) . ") ORDER BY name");
+        $stmt->execute([$companyId]);
+        $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 }
 
 $jobCodes = getJobCodes();
 
 $mySiteIds = getMySiteIds($user);
 if ($isManager) {
-    $workers = $pdo->query("SELECT id, first_name || ' ' || last_name as name, current_site_id FROM workers ORDER BY last_name")->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->prepare("SELECT id, first_name || ' ' || last_name as name, current_site_id FROM workers WHERE company_id = ? ORDER BY last_name");
+    $stmt->execute([$companyId]);
+    $workers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } else {
-    $stmt = $pdo->prepare("SELECT id, first_name || ' ' || last_name as name, current_site_id FROM workers WHERE current_site_id IN (" . siteIdsForSql($mySiteIds) . ") OR current_site_id IS NULL ORDER BY last_name");
-    $stmt->execute();
+    $stmt = $pdo->prepare("SELECT id, first_name || ' ' || last_name as name, current_site_id FROM workers WHERE company_id = ? AND (current_site_id IN (" . siteIdsForSql($mySiteIds) . ") OR current_site_id IS NULL) ORDER BY last_name");
+    $stmt->execute([$companyId]);
     $workers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
+    require_csrf();
+    // Validate site and worker belong to same company
+    $chkSite = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+    $chkSite->execute([$_POST['site_id'], $companyId]);
+    if (!$chkSite->fetch()) { flash('Invalid site for your company'); header('Location: hours.php'); exit; }
+    $chkWorker = $pdo->prepare("SELECT id FROM workers WHERE id = ? AND company_id = ?");
+    $chkWorker->execute([$_POST['worker_id'], $companyId]);
+    if (!$chkWorker->fetch()) { flash('Invalid worker for your company'); header('Location: hours.php'); exit; }
     // Supervisor-only validation
     if ($isSupervisor) {
-        $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND supervisor_id = ?");
-        $check->execute([$_POST['site_id'], $user['id']]);
-        if (!$check->fetch()) { flash('You can only enter hours for your own sites'); header('Location: hours.php'); exit; }
+        $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ? AND supervisor_id = ?");
+        $check->execute([$_POST['site_id'], $companyId, $user['id']]);
+        if (!$check->fetch()) {
+            // Also check site_supervisors
+            $chk2 = $pdo->prepare("SELECT site_id FROM site_supervisors WHERE site_id = ? AND user_id = ?");
+            $chk2->execute([$_POST['site_id'], $user['id']]);
+            if (!$chk2->fetch()) { flash('You can only enter hours for your own sites'); header('Location: hours.php'); exit; }
+        }
     }
     $stmt = $pdo->prepare("INSERT INTO work_hours (worker_id, site_id, work_date, hours, overtime_hours, notes, entered_by) VALUES (?, ?, ?, ?, ?, ?, ?)");
     $stmt->execute([$_POST['worker_id'], $_POST['site_id'], $_POST['work_date'], (float)$_POST['hours'], (float)($_POST['overtime_hours'] ?? 0), $_POST['notes'] ?? '', $user['id']]);
@@ -42,6 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
+    require_csrf();
     // Supervisor-only validation: can only edit hours for own sites
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT wh.id FROM work_hours wh JOIN sites s ON s.id = wh.site_id WHERE wh.id = ? AND s.supervisor_id = ?");
@@ -60,14 +87,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit'
     exit;
 }
 
-if (isset($_GET['delete'])) {
+if (isset($_POST['delete']) || isset($_GET['delete'])) {
+    $__hid = (int)($_POST['delete'] ?? $_GET['delete']);
+    if ($_SERVER['REQUEST_METHOD']==='POST') { require_csrf(); } else { if (!validate_csrf($_GET['csrf'] ?? '')) { flash('Invalid token'); header('Location: hours.php'); exit; } }
     // Supervisor-only validation: can only delete own site hours
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT wh.id FROM work_hours wh JOIN sites s ON s.id = wh.site_id WHERE wh.id = ? AND s.supervisor_id = ?");
-        $check->execute([$_GET['delete'], $user['id']]);
+        $check->execute([$__hid, $user['id']]);
         if (!$check->fetch()) { flash('You can only delete hours for your own sites'); header('Location: hours.php'); exit; }
     }
-    $pdo->prepare("DELETE FROM work_hours WHERE id = ?")->execute([$_GET['delete']]);
+    $pdo->prepare("DELETE FROM work_hours WHERE id = ?")->execute([$__hid]);
     flash('Hours entry removed', 'warning');
     header('Location: hours.php');
     exit;
@@ -164,6 +193,7 @@ foreach ($hours as $h) {
                     <div class="alert warning">You have no sites assigned. Please contact the manager.</div>
                 <?php else: ?>
                 <form method="POST">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-row">
@@ -271,7 +301,8 @@ foreach ($hours as $h) {
                                 <td><small><?= h($h['entered_by_name']) ?></small></td>
                                 <td class="actions">
                                     <a href="hours.php?edit=<?= $h['id'] ?>" class="btn btn-sm btn-edit">Edit</a>
-                                    <form method="GET" style="display:inline" data-confirm="Remove this hours entry?">
+                                    <form method="POST" style="display:inline" data-confirm="Remove this hours entry?">
+                                        <?= csrf_field() ?>
                                         <input type="hidden" name="delete" value="<?= $h['id'] ?>">
                                         <button class="btn btn-sm btn-delete">×</button>
                                     </form>

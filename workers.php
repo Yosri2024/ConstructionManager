@@ -5,6 +5,7 @@ $user = currentUser();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
 $pdo = getDB();
+$companyId = getCurrentCompanyId();
 $mySiteIds = getMySiteIds($user);
 
 // Supervisors cannot add/edit/delete — redirect to view-only
@@ -22,10 +23,17 @@ if (!$isManager) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
+    require_csrf();
     if (!$isManager) { flash('Access denied'); header('Location: workers.php'); exit; }
-    $stmt = $pdo->prepare("INSERT INTO workers (first_name, last_name, role_title, phone, current_site_id, employment_start, employment_end) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    // verify site belongs to company
+    if (!empty($_POST['current_site_id'])) {
+        $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+        $chk->execute([$_POST['current_site_id'], $companyId]);
+        if (!$chk->fetch()) { flash('Invalid site'); header('Location: workers.php'); exit; }
+    }
+    $stmt = $pdo->prepare("INSERT INTO workers (company_id, first_name, last_name, role_title, phone, current_site_id, employment_start, employment_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
     $stmt->execute([
-        $_POST['first_name'], $_POST['last_name'], $_POST['role_title'] ?? '', $_POST['phone'] ?? '',
+        $companyId, $_POST['first_name'], $_POST['last_name'], $_POST['role_title'] ?? '', $_POST['phone'] ?? '',
         $_POST['current_site_id'] ?: null,
         $_POST['employment_start'] ?: null,
         $_POST['employment_end'] ?: null
@@ -35,51 +43,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     exit;
 }
 
-if (isset($_GET['delete'])) {
+if (isset($_POST['delete']) || isset($_GET['delete'])) {
+    if ($_SERVER['REQUEST_METHOD']==='POST') { require_csrf(); } else { if (!validate_csrf($_GET['csrf'] ?? '')) { flash('Invalid token'); header('Location: workers.php'); exit; } }
+    $__del = (int)($_POST['delete'] ?? $_GET['delete']);
     if (!$isManager) { flash('Access denied'); header('Location: workers.php'); exit; }
-    $pdo->prepare("DELETE FROM workers WHERE id = ?")->execute([$_GET['delete']]);
+    // Ensure worker belongs to company
+    $chk = $pdo->prepare("SELECT id FROM workers WHERE id = ? AND company_id = ?");
+    $chk->execute([$__del, $companyId]);
+    if (!$chk->fetch()) { flash('Access denied'); header('Location: workers.php'); exit; }
+    $pdo->prepare("DELETE FROM workers WHERE id = ? AND company_id = ?")->execute([$__del, $companyId]);
     flash('Worker removed', 'warning');
     header('Location: workers.php');
     exit;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
+    require_csrf();
     if (!$isManager) { flash('Access denied'); header('Location: workers.php'); exit; }
-    $stmt = $pdo->prepare("UPDATE workers SET first_name=?, last_name=?, role_title=?, phone=?, current_site_id=?, status=?, employment_start=?, employment_end=? WHERE id=?");
+    // Ensure worker belongs to company
+    $chk = $pdo->prepare("SELECT id FROM workers WHERE id = ? AND company_id = ?");
+    $chk->execute([$_POST['id'], $companyId]);
+    if (!$chk->fetch()) { flash('Access denied'); header('Location: workers.php'); exit; }
+    if (!empty($_POST['current_site_id'])) {
+        $chkS = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+        $chkS->execute([$_POST['current_site_id'], $companyId]);
+        if (!$chkS->fetch()) { flash('Invalid site'); header('Location: workers.php'); exit; }
+    }
+    $stmt = $pdo->prepare("UPDATE workers SET first_name=?, last_name=?, role_title=?, phone=?, current_site_id=?, status=?, employment_start=?, employment_end=? WHERE id=? AND company_id=?");
     $stmt->execute([
         $_POST['first_name'], $_POST['last_name'], $_POST['role_title'] ?? '', $_POST['phone'] ?? '',
         $_POST['current_site_id'] ?: null,
         $_POST['status'] ?? 'available',
         $_POST['employment_start'] ?: null,
         $_POST['employment_end'] ?: null,
-        $_POST['id']
+        $_POST['id'], $companyId
     ]);
     flash('Worker updated');
     header('Location: workers.php');
     exit;
 }
 
-// Build query — supervisor sees only their site workers
+// Build query — supervisor sees only their site workers, always filtered by company
 if ($isManager) {
-    $workers = $pdo->query("
+    $workers = $pdo->prepare("
         SELECT w.*, s.name as site_name
         FROM workers w
         LEFT JOIN sites s ON s.id = w.current_site_id
+        WHERE w.company_id = ?
         ORDER BY s.name, w.last_name, w.first_name
-    ")->fetchAll(PDO::FETCH_ASSOC);
-    $sites = $pdo->query("SELECT id, name FROM sites ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
+    ");
+    $workers->execute([$companyId]);
+    $workers = $workers->fetchAll(PDO::FETCH_ASSOC);
+    $sites = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? ORDER BY name");
+    $sites->execute([$companyId]);
+    $sites = $sites->fetchAll(PDO::FETCH_ASSOC);
 } else {
     $stmt = $pdo->prepare("
         SELECT w.*, s.name as site_name
         FROM workers w
         LEFT JOIN sites s ON s.id = w.current_site_id
-        WHERE w.current_site_id IN (" . siteIdsForSql($mySiteIds) . ")
+        WHERE w.company_id = ? AND w.current_site_id IN (" . siteIdsForSql($mySiteIds) . ")
         ORDER BY s.name, w.last_name, w.first_name
     ");
-    $stmt->execute();
+    $stmt->execute([$companyId]);
     $workers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    $s = $pdo->prepare("SELECT id, name FROM sites WHERE id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
-    $s->execute();
+    $s = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
+    $s->execute([$companyId]);
     $sites = $s->fetchAll(PDO::FETCH_ASSOC);
 }
 
@@ -105,14 +134,17 @@ if ($f_role || $f_site_w || $f_status_w || $f_start_from || $f_start_to) {
     }));
 }
 
-// Get unique roles for filter dropdown
-$roles = $pdo->query("SELECT DISTINCT role_title FROM workers WHERE role_title IS NOT NULL AND role_title != '' ORDER BY role_title")->fetchAll(PDO::FETCH_COLUMN);
+// Get unique roles for filter dropdown (per company)
+$roles = $pdo->prepare("SELECT DISTINCT role_title FROM workers WHERE company_id = ? AND role_title IS NOT NULL AND role_title != '' ORDER BY role_title");
+$roles->execute([$companyId]);
+$roles = $roles->fetchAll(PDO::FETCH_COLUMN);
 
 $editing = null;
 if (isset($_GET['edit'])) {
-    $stmt = $pdo->prepare("SELECT * FROM workers WHERE id = ?");
-    $stmt->execute([$_GET['edit']]);
+    $stmt = $pdo->prepare("SELECT * FROM workers WHERE id = ? AND company_id = ?");
+    $stmt->execute([$_GET['edit'], $companyId]);
     $editing = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$editing) { flash('Worker not found'); header('Location: workers.php'); exit; }
 }
 ?>
 <!DOCTYPE html>
@@ -122,6 +154,17 @@ if (isset($_GET['edit'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Workers - Construction Manager</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/intl-tel-input@18.2.1/build/css/intlTelInput.css">
+    <style>
+        .iti { width:100%; display:block; }
+        .iti input.form-control, .iti input[type="tel"] { padding-left: 90px !important; }
+        .iti__flag { background-image: url("https://cdn.jsdelivr.net/npm/intl-tel-input@18.2.1/build/img/flags.png"); }
+        @media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+            .iti__flag { background-image: url("https://cdn.jsdelivr.net/npm/intl-tel-input@18.2.1/build/img/flags@2x.png"); }
+        }
+        .iti--separate-dial-code .iti__selected-flag { background-color: #f9fafb; border-right: 1px solid #e5e7eb; }
+        .iti input::placeholder { color: #9ca3af; opacity:1; }
+    </style>
 </head>
 <body>
 <?php require_once 'sidebar.php'; ?>
@@ -150,6 +193,7 @@ if (isset($_GET['edit'])) {
             </div>
             <div class="card-body">
                 <form method="POST">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-row">
@@ -169,7 +213,7 @@ if (isset($_GET['edit'])) {
                         </div>
                         <div class="form-group">
                             <label>Phone</label>
-                            <input type="text" name="phone" value="<?= h($editing['phone'] ?? '') ?>">
+                            <input type="tel" id="workerPhone" name="phone" value="<?= h($editing['phone'] ?? '') ?>" placeholder="Enter phone">
                         </div>
                     </div>
                     <div class="form-row">
@@ -262,7 +306,8 @@ if (isset($_GET['edit'])) {
                             <td class="actions">
                                 <?php if ($isManager): ?>
                                 <a href="workers.php?edit=<?= $w['id'] ?>" class="btn btn-sm btn-edit">Edit</a>
-                                <form method="GET" style="display:inline" data-confirm="Remove this worker?">
+                                <form method="POST" style="display:inline" data-confirm="Remove this worker?">
+                                    <?= csrf_field() ?>
                                     <input type="hidden" name="delete" value="<?= $w['id'] ?>">
                                     <button class="btn btn-sm btn-delete">Del</button>
                                 </form>
@@ -283,6 +328,31 @@ if (isset($_GET['edit'])) {
 document.querySelectorAll('#workerFilterForm select, #workerFilterForm input').forEach(function(el){
     el.addEventListener('change', function(){ document.getElementById('workerFilterForm').submit(); });
 });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/intl-tel-input@18.2.1/build/js/intlTelInput.min.js"></script>
+<script>
+(function(){
+    var input = document.querySelector("#workerPhone");
+    if(!input) return;
+    var iti = window.intlTelInput(input, {
+        initialCountry: "auto",
+        geoIpLookup: function(success, failure){
+            fetch("https://ipapi.co/json/").then(function(res){ return res.json(); }).then(function(data){ success(data.country_code); }).catch(function(){ success("us"); });
+        },
+        utilsScript: "https://cdn.jsdelivr.net/npm/intl-tel-input@18.2.1/build/js/utils.js",
+        separateDialCode: true,
+        preferredCountries: ["us","gb","ma","fr","de","dz","eg","sa","ae","tr","in","pk","tn"],
+        autoPlaceholder: "polite"
+    });
+    var form = input.closest("form");
+    if(form){
+        form.addEventListener("submit", function(){
+            if(iti.isValidNumber()){
+                input.value = iti.getNumber();
+            }
+        });
+    }
+})();
 </script>
 </body>
 </html>

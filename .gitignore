@@ -1,27 +1,39 @@
 # =============================================================
-# ConstructionManager .gitignore
+# ConstructionManager .gitignore - SECURED
 # =============================================================
 
 # Database files (local development only)
-/data/*.db
-/data/*.db-journal
-/data/*.db-shm
-/data/*.db-wal
+ /data/*.db
+ /data/*.db-journal
+ /data/*.db-shm
+ /data/*.db-wal
+ /data/*.log
+ /data/php_errors.log
 
-# Environment & secrets
+# Environment & secrets - NEVER commit
 .env
 .env.local
+.env.production.bak
+.env.*.bak
 config.local.php
 *.local.php
+config.php.bak*
+*.bak
+*.bak_singleton
 
-# Logs
+# Logs - never upload
 *.log
 debug.log
+report.txt
+*.sql
+database_mysql.sql
+database.sql
 
-# OS files
+# Backup & OS files
 .DS_Store
 Thumbs.db
 desktop.ini
+*~
 
 # IDE files
 .vscode/
@@ -37,8 +49,15 @@ wamp.ini
 *.tmp
 *.bak
 *.backup
-*~
+*.old
+*.orig
+*.save
+*.temp
 
 # Build artifacts
 /dist/
 /build/
+
+# InfinityFree: do not upload local data folder content (except .htaccess)
+data/
+!data/.htaccess

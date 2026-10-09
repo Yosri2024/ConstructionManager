@@ -4,35 +4,47 @@ requireLogin();
 
 $pdo = getDB();
 $user = currentUser();
+$companyId = getCurrentCompanyId();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
 
 // Get sites the user can manage
 $mySiteIds = getMySiteIds($user);
 if ($isManager) {
-    $sites = $pdo->query("SELECT id, name FROM sites ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
+    $sites = $pdo->query("SELECT id, name FROM sites WHERE company_id = $companyId ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 } else {
-    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
-    $stmt->execute();
+    $stmt = $pdo->prepare("SELECT id, name FROM sites WHERE company_id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ") ORDER BY name");
+    $stmt->execute([$companyId]);
     $sites = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-// All workers with site name and status — supervisor POST validation restricts which site they can be assigned to
-$workers = $pdo->query("
+// All workers with site name and status — filtered by company
+$workers = $pdo->prepare("
     SELECT w.id, w.first_name || ' ' || w.last_name as name, w.current_site_id, w.status, s.name as site_name
     FROM workers w
     LEFT JOIN sites s ON s.id = w.current_site_id
+    WHERE w.company_id = ?
     ORDER BY w.last_name
-")->fetchAll(PDO::FETCH_ASSOC);
+");
+$workers->execute([$companyId]);
+$workers = $workers->fetchAll(PDO::FETCH_ASSOC);
 
 // --- CREATE ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
+    require_csrf();
     // Supervisor: validate site belongs to them (via site_supervisors or legacy supervisor_id)
     if ($isSupervisor) {
-        $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ")");
+        $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = $companyId AND id IN (" . siteIdsForSql($mySiteIds) . ")");
         $check->execute([$_POST['site_id']]);
         if (!$check->fetch()) { flash('You can only assign workers to your own sites'); header('Location: assignments.php'); exit; }
     }
+    // Validate worker and site belong to company
+    $chkW = $pdo->prepare("SELECT id FROM workers WHERE id = ? AND company_id = ?");
+    $chkW->execute([$_POST['worker_id'], $companyId]);
+    if (!$chkW->fetch()) { flash('Invalid worker for your company'); header('Location: assignments.php'); exit; }
+    $chkS = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+    $chkS->execute([$_POST['site_id'], $companyId]);
+    if (!$chkS->fetch()) { flash('Invalid site for your company'); header('Location: assignments.php'); exit; }
     $stmt = $pdo->prepare("INSERT INTO assignments (worker_id, site_id, start_date, end_date, notes) VALUES (?, ?, ?, ?, ?)");
     $stmt->execute([$_POST['worker_id'], $_POST['site_id'], $_POST['start_date'], $_POST['end_date'] ?: null, $_POST['notes'] ?? '']);
     // Update worker's current site
@@ -78,8 +90,8 @@ if (isset($_GET['end'])) {
     exit;
 }
 
-// --- LIST ---
-$where = [];
+// --- LIST --- filtered by company
+$where = ["s.company_id = $companyId", "w.company_id = $companyId"];
 $params = [];
 if ($isSupervisor) {
     $where[] = 's.id IN (' . siteIdsForSql($mySiteIds) . ')';
@@ -152,6 +164,7 @@ $assignments = $assignments->fetchAll(PDO::FETCH_ASSOC);
                     <div class="alert warning">You have no sites assigned. Please contact the manager.</div>
                 <?php else: ?>
                 <form method="POST">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="create">
                     <div class="form-row-3">
                         <div class="form-group">
@@ -228,10 +241,18 @@ $assignments = $assignments->fetchAll(PDO::FETCH_ASSOC);
                             <td><?= h($a['notes']) ?></td>
                             <td class="actions">
                                 <?php if ($isActive && ($isManager || $isSupervisor)): ?>
-                                <a href="assignments.php?end=<?= $a['id'] ?>" class="btn btn-sm btn-end" onclick="return confirm('End this assignment now?');">End</a>
+                                <form method="POST" style="display:inline" data-confirm="End this assignment now?">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="end" value="<?= $a['id'] ?>">
+                                <button class="btn btn-sm btn-end">End</button>
+                            </form>
                                 <?php endif; ?>
                                 <?php if ($isManager || $isSupervisor): ?>
-                                <a href="assignments.php?delete=<?= $a['id'] ?>" class="btn btn-sm btn-delete" onclick="return confirm('Delete this assignment?');">Del</a>
+                                <form method="POST" style="display:inline" data-confirm="Delete this assignment?">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="delete" value="<?= $a['id'] ?>">
+                                <button class="btn btn-sm btn-delete">Del</button>
+                            </form>
                                 <?php endif; ?>
                             </td>
                         </tr>

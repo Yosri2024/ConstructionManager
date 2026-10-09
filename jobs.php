@@ -3,38 +3,65 @@ require_once 'config.php';
 requireRole('manager');
 
 $pdo = getDB();
+$companyId = getCurrentCompanyId();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
-    $stmt = $pdo->prepare("INSERT INTO jobs (code, name, description, status, pause_reason) VALUES (?, ?, ?, ?, ?)");
-    $stmt->execute([$_POST['code'], $_POST['name'], $_POST['description'] ?? '', $_POST['status'] ?? 'active', $_POST['pause_reason'] ?? '']);
+    require_csrf();
+    // Check code unique per company
+    $chk = $pdo->prepare("SELECT id FROM jobs WHERE company_id = ? AND code = ?");
+    $chk->execute([$companyId, trim($_POST['code'])]);
+    if ($chk->fetch()) { flash('Job code already exists in your company'); header('Location: jobs.php'); exit; }
+    $stmt = $pdo->prepare("INSERT INTO jobs (company_id, code, name, description, status, pause_reason) VALUES (?, ?, ?, ?, ?, ?)");
+    $stmt->execute([$companyId, $_POST['code'], $_POST['name'], $_POST['description'] ?? '', $_POST['status'] ?? 'active', $_POST['pause_reason'] ?? '']);
     flash('Job created successfully');
     header('Location: jobs.php');
     exit;
 }
 
-if (isset($_GET['delete'])) {
-    $stmt = $pdo->prepare("DELETE FROM jobs WHERE id = ?");
-    $stmt->execute([$_GET['delete']]);
-    flash('Job deleted', 'warning');
+if (isset($_POST['delete']) || isset($_GET['delete'])) {
+    if ($_SERVER['REQUEST_METHOD']==='POST') { require_csrf(); } else { if (!validate_csrf($_GET['csrf'] ?? '')) { flash('Invalid token'); header('Location: jobs.php'); exit; } }
+    $__jid = (int)($_POST['delete'] ?? $_GET['delete']);
+    // Ensure job belongs to company
+    $chk = $pdo->prepare("SELECT id FROM jobs WHERE id = ? AND company_id = ?");
+    $chk->execute([$__jid, $companyId]);
+    if ($chk->fetch()) {
+        $stmt = $pdo->prepare("DELETE FROM jobs WHERE id = ? AND company_id = ?");
+        $stmt->execute([$__jid, $companyId]);
+        flash('Job deleted', 'warning');
+    } else {
+        flash('Access denied or job not found');
+    }
     header('Location: jobs.php');
     exit;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
-    $stmt = $pdo->prepare("UPDATE jobs SET code = ?, name = ?, description = ?, status = ?, pause_reason = ? WHERE id = ?");
-    $stmt->execute([$_POST['code'], $_POST['name'], $_POST['description'] ?? '', $_POST['status'] ?? 'active', $_POST['pause_reason'] ?? '', $_POST['id']]);
+    require_csrf();
+    // Verify ownership
+    $chk = $pdo->prepare("SELECT id FROM jobs WHERE id = ? AND company_id = ?");
+    $chk->execute([$_POST['id'], $companyId]);
+    if (!$chk->fetch()) { flash('Access denied'); header('Location: jobs.php'); exit; }
+    // Check code unique per company excluding self
+    $chk2 = $pdo->prepare("SELECT id FROM jobs WHERE company_id = ? AND code = ? AND id != ?");
+    $chk2->execute([$companyId, trim($_POST['code']), $_POST['id']]);
+    if ($chk2->fetch()) { flash('Job code already exists in your company'); header('Location: jobs.php?edit=' . (int)$_POST['id']); exit; }
+    $stmt = $pdo->prepare("UPDATE jobs SET code = ?, name = ?, description = ?, status = ?, pause_reason = ? WHERE id = ? AND company_id = ?");
+    $stmt->execute([$_POST['code'], $_POST['name'], $_POST['description'] ?? '', $_POST['status'] ?? 'active', $_POST['pause_reason'] ?? '', $_POST['id'], $companyId]);
     flash('Job updated');
     header('Location: jobs.php');
     exit;
 }
 
-$jobs = $pdo->query("
+$jobs = $pdo->prepare("
     SELECT j.*,
-        (SELECT COUNT(*) FROM sites WHERE job_id = j.id) AS site_count,
-        (SELECT COUNT(DISTINCT worker_id) FROM assignments a JOIN sites s ON s.id = a.site_id WHERE s.job_id = j.id) AS worker_count
+        (SELECT COUNT(*) FROM sites WHERE job_id = j.id AND company_id = ?) AS site_count,
+        (SELECT COUNT(DISTINCT worker_id) FROM assignments a JOIN sites s ON s.id = a.site_id WHERE s.job_id = j.id AND s.company_id = ?) AS worker_count
     FROM jobs j
+    WHERE j.company_id = ?
     ORDER BY j.created_at DESC
-")->fetchAll(PDO::FETCH_ASSOC);
+");
+$jobs->execute([$companyId, $companyId, $companyId]);
+$jobs = $jobs->fetchAll(PDO::FETCH_ASSOC);
 
 // Apply filters in PHP (in-memory)
 $f_status_job = trim($_GET['f_status'] ?? '');
@@ -52,9 +79,10 @@ if ($f_status_job || $f_search_job) {
 
 $editing = null;
 if (isset($_GET['edit'])) {
-    $stmt = $pdo->prepare("SELECT * FROM jobs WHERE id = ?");
-    $stmt->execute([$_GET['edit']]);
+    $stmt = $pdo->prepare("SELECT * FROM jobs WHERE id = ? AND company_id = ?");
+    $stmt->execute([$_GET['edit'], $companyId]);
     $editing = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$editing) { flash('Job not found'); header('Location: jobs.php'); exit; }
 }
 ?>
 <!DOCTYPE html>
@@ -87,6 +115,7 @@ if (isset($_GET['edit'])) {
             </div>
             <div class="card-body">
                 <form method="POST">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-row">
@@ -166,7 +195,8 @@ if (isset($_GET['edit'])) {
                             <td class="actions">
                                 <a href="jobs.php?edit=<?= $j['id'] ?>" class="btn btn-sm btn-edit">Edit</a>
                                 <a href="job_detail.php?id=<?= $j['id'] ?>" class="btn btn-sm btn-view">View</a>
-                                <form method="GET" style="display:inline" data-confirm="Delete this job?">
+                                <form method="POST" style="display:inline" data-confirm="Delete this job?">
+                                    <?= csrf_field() ?>
                                     <input type="hidden" name="delete" value="<?= $j['id'] ?>">
                                     <button class="btn btn-sm btn-delete">Delete</button>
                                 </form>

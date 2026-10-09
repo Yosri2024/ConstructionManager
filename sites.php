@@ -5,6 +5,7 @@ $user = currentUser();
 $isManager = $user['role'] === 'manager';
 $isSupervisor = $user['role'] === 'supervisor';
 $pdo = getDB();
+$companyId = getCurrentCompanyId();
 
 // Managers can create/edit/delete. Supervisors see all sites read-only.
 if (!$isManager) {
@@ -22,15 +23,31 @@ if (!$isManager) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
+    require_csrf();
     $jobId = $_POST['job_id'] ?: null;
     if (!$jobId && !empty($_POST['job_code_standalone'])) {
-        $stmt = $pdo->prepare("INSERT INTO jobs (code, name, description, client_name, budget, status) VALUES (?, ?, ?, ?, ?, 'active')");
-        $stmt->execute([$_POST['job_code_standalone'], $_POST['name'] . ' Project', $_POST['job_description_standalone'] ?? '', $_POST['client_name'] ?? '', $_POST['budget'] ?: null]);
+        // Check code duplicate per company
+        $chk = $pdo->prepare("SELECT id FROM jobs WHERE company_id = ? AND code = ?");
+        $chk->execute([$companyId, trim($_POST['job_code_standalone'])]);
+        if ($chk->fetch()) { flash('Job code already exists in your company'); header('Location: sites.php'); exit; }
+        $stmt = $pdo->prepare("INSERT INTO jobs (company_id, code, name, description, client_name, budget, status) VALUES (?, ?, ?, ?, ?, ?, 'active')");
+        $stmt->execute([$companyId, $_POST['job_code_standalone'], $_POST['name'] . ' Project', $_POST['job_description_standalone'] ?? '', $_POST['client_name'] ?? '', $_POST['budget'] ?: null]);
         $jobId = $pdo->lastInsertId();
+    } else if ($jobId) {
+        // Verify job belongs to company
+        $chk = $pdo->prepare("SELECT id FROM jobs WHERE id = ? AND company_id = ?");
+        $chk->execute([$jobId, $companyId]);
+        if (!$chk->fetch()) { flash('Invalid job'); header('Location: sites.php'); exit; }
     }
-    $stmt = $pdo->prepare("INSERT INTO sites (name, address, job_id, supervisor_id, status, client_name, budget, job_code, job_description, pause_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    // Verify supervisor belongs to company
+    if (!empty($_POST['supervisor_id'])) {
+        $chkS = $pdo->prepare("SELECT id FROM users WHERE id = ? AND company_id = ? AND role='supervisor'");
+        $chkS->execute([$_POST['supervisor_id'], $companyId]);
+        if (!$chkS->fetch()) { flash('Invalid supervisor'); header('Location: sites.php'); exit; }
+    }
+    $stmt = $pdo->prepare("INSERT INTO sites (company_id, name, address, job_id, supervisor_id, status, client_name, budget, job_code, job_description, pause_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     $stmt->execute([
-        $_POST['name'], $_POST['address'] ?? '', $jobId, $_POST['supervisor_id'] ?: null, $_POST['status'] ?? 'active',
+        $companyId, $_POST['name'], $_POST['address'] ?? '', $jobId, $_POST['supervisor_id'] ?: null, $_POST['status'] ?? 'active',
         $_POST['client_name'] ?? '', $_POST['budget'] ?: null, $_POST['job_code_standalone'] ?? '', $_POST['job_description_standalone'] ?? '', $_POST['pause_reason'] ?? ''
     ]);
     $newSiteId = $pdo->lastInsertId();
@@ -43,19 +60,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     exit;
 }
 
-if (isset($_GET['delete'])) {
-    $pdo->prepare("DELETE FROM sites WHERE id = ?")->execute([$_GET['delete']]);
-    flash('Site deleted', 'warning');
+if (isset($_POST['delete']) || isset($_GET['delete'])) {
+    if ($_SERVER['REQUEST_METHOD']==='POST') { require_csrf(); } else { if (!validate_csrf($_GET['csrf'] ?? '')) { flash('Invalid token'); header('Location: sites.php'); exit; } }
+    $__delId = (int)($_POST['delete'] ?? $_GET['delete']);
+    // Ensure site belongs to company
+    $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+    $chk->execute([$__delId, $companyId]);
+    if ($chk->fetch()) {
+        $pdo->prepare("DELETE FROM sites WHERE id = ? AND company_id = ?")->execute([$__delId, $companyId]);
+        flash('Site deleted', 'warning');
+    } else {
+        flash('Access denied');
+    }
     header('Location: sites.php');
     exit;
 }
 
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
+    require_csrf();
+    // Verify site belongs to company
+    $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
+    $chk->execute([$_POST['id'], $companyId]);
+    if (!$chk->fetch()) { flash('Access denied'); header('Location: sites.php'); exit; }
     $jobId = $_POST['job_id'] ?: null;
-    $stmt = $pdo->prepare("UPDATE sites SET name = ?, address = ?, job_id = ?, supervisor_id = ?, status = ?, client_name = ?, budget = ?, job_code = ?, job_description = ?, pause_reason = ? WHERE id = ?");
+    if ($jobId) {
+        $chkJ = $pdo->prepare("SELECT id FROM jobs WHERE id = ? AND company_id = ?");
+        $chkJ->execute([$jobId, $companyId]);
+        if (!$chkJ->fetch()) { flash('Invalid job'); header('Location: sites.php'); exit; }
+    }
+    if (!empty($_POST['supervisor_id'])) {
+        $chkS = $pdo->prepare("SELECT id FROM users WHERE id = ? AND company_id = ?");
+        $chkS->execute([$_POST['supervisor_id'], $companyId]);
+        if (!$chkS->fetch()) { flash('Invalid supervisor'); header('Location: sites.php'); exit; }
+    }
+    $stmt = $pdo->prepare("UPDATE sites SET name = ?, address = ?, job_id = ?, supervisor_id = ?, status = ?, client_name = ?, budget = ?, job_code = ?, job_description = ?, pause_reason = ? WHERE id = ? AND company_id = ?");
     $stmt->execute([
         $_POST['name'], $_POST['address'] ?? '', $jobId, $_POST['supervisor_id'] ?: null, $_POST['status'] ?? 'active',
-        $_POST['client_name'] ?? '', $_POST['budget'] ?: null, $_POST['job_code_standalone'] ?? '', $_POST['job_description_standalone'] ?? '', $_POST['pause_reason'] ?? '', $_POST['id']
+        $_POST['client_name'] ?? '', $_POST['budget'] ?: null, $_POST['job_code_standalone'] ?? '', $_POST['job_description_standalone'] ?? '', $_POST['pause_reason'] ?? '', $_POST['id'], $companyId
     ]);
     // Sync site_supervisors — clear and re-add selected
     $siteId = (int)$_POST['id'];
@@ -72,17 +114,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit'
     exit;
 }
 
-// Get all site IDs current user can see
+// Get all site IDs current user can see (already filtered by company via getMySiteIds)
 $mySiteIds = getMySiteIds($user);
 
-// Build SQL filter
-$siteFilterSql = $isManager ? '' : 'WHERE s.id IN (' . siteIdsForSql($mySiteIds) . ')';
+// Build SQL filter - always filter by company
+if ($isManager) {
+    $siteFilterSql = "WHERE s.company_id = $companyId";
+} else {
+    $siteFilterSql = "WHERE s.company_id = $companyId AND s.id IN (" . siteIdsForSql($mySiteIds) . ")";
+}
 
 $sites = $pdo->query("
     SELECT s.*, j.name as job_name, j.code as job_ref_code, j.description as job_full_description,
         u.full_name as supervisor_name,
-        (SELECT COUNT(*) FROM workers WHERE current_site_id = s.id) as worker_count,
-        (SELECT COUNT(*) FROM work_hours WHERE site_id = s.id) as hours_count,
+        (SELECT COUNT(*) FROM workers WHERE current_site_id = s.id AND company_id = $companyId) as worker_count,
+        (SELECT COUNT(*) FROM work_hours wh JOIN workers w ON w.id = wh.worker_id WHERE wh.site_id = s.id AND w.company_id = $companyId) as hours_count,
         (SELECT GROUP_CONCAT(u2.full_name, ', ')
          FROM site_supervisors ss2 JOIN users u2 ON u2.id = ss2.user_id
          WHERE ss2.site_id = s.id) as supervisor_names
@@ -111,13 +157,17 @@ if ($f_site || $f_job || $f_status || $f_search) {
     }));
 }
 
-$jobs = $pdo->query("SELECT id, code, name FROM jobs ORDER BY code")->fetchAll(PDO::FETCH_ASSOC);
-$supervisors = $pdo->query("SELECT id, full_name FROM users WHERE role = 'supervisor' ORDER BY full_name")->fetchAll(PDO::FETCH_ASSOC);
+$jobs = $pdo->prepare("SELECT id, code, name FROM jobs WHERE company_id = ? ORDER BY code");
+$jobs->execute([$companyId]);
+$jobs = $jobs->fetchAll(PDO::FETCH_ASSOC);
+$supervisors = $pdo->prepare("SELECT id, full_name FROM users WHERE company_id = ? AND role = 'supervisor' ORDER BY full_name");
+$supervisors->execute([$companyId]);
+$supervisors = $supervisors->fetchAll(PDO::FETCH_ASSOC);
 
 $editing = null;
 if (isset($_GET['edit'])) {
-    $stmt = $pdo->prepare("SELECT * FROM sites WHERE id = ?");
-    $stmt->execute([$_GET['edit']]);
+    $stmt = $pdo->prepare("SELECT * FROM sites WHERE id = ? AND company_id = ?");
+    $stmt->execute([$_GET['edit'], $companyId]);
     $editing = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($editing) {
         // Load assigned supervisors
@@ -153,6 +203,7 @@ if (isset($_GET['edit'])) {
             </div>
             <div class="card-body">
                 <form method="POST">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-group">
@@ -290,7 +341,8 @@ if (isset($_GET['edit'])) {
                                 <a href="site_detail.php?id=<?= $s['id'] ?>" class="btn btn-sm btn-view">View</a>
                                 <?php if ($isManager): ?>
                                 <a href="sites.php?edit=<?= $s['id'] ?>" class="btn btn-sm btn-edit">Edit</a>
-                                <form method="GET" style="display:inline" data-confirm="Delete this site?">
+                                <form method="POST" style="display:inline" data-confirm="Delete this site?">
+                                    <?= csrf_field() ?>
                                     <input type="hidden" name="delete" value="<?= $s['id'] ?>">
                                     <button class="btn btn-sm btn-delete">Del</button>
                                 </form>
