@@ -23,7 +23,6 @@ if (!$isManager) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
-    require_csrf();
     $jobId = $_POST['job_id'] ?: null;
     if (!$jobId && !empty($_POST['job_code_standalone'])) {
         // Check code duplicate per company
@@ -60,14 +59,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     exit;
 }
 
-if (isset($_POST['delete']) || isset($_GET['delete'])) {
-    if ($_SERVER['REQUEST_METHOD']==='POST') { require_csrf(); } else { if (!validate_csrf($_GET['csrf'] ?? '')) { flash('Invalid token'); header('Location: sites.php'); exit; } }
-    $__delId = (int)($_POST['delete'] ?? $_GET['delete']);
+if (isset($_GET['delete'])) {
     // Ensure site belongs to company
     $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
-    $chk->execute([$__delId, $companyId]);
+    $chk->execute([$_GET['delete'], $companyId]);
     if ($chk->fetch()) {
-        $pdo->prepare("DELETE FROM sites WHERE id = ? AND company_id = ?")->execute([$__delId, $companyId]);
+        $pdo->prepare("DELETE FROM sites WHERE id = ? AND company_id = ?")->execute([$_GET['delete'], $companyId]);
         flash('Site deleted', 'warning');
     } else {
         flash('Access denied');
@@ -76,9 +73,7 @@ if (isset($_POST['delete']) || isset($_GET['delete'])) {
     exit;
 }
 
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
-    require_csrf();
     // Verify site belongs to company
     $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
     $chk->execute([$_POST['id'], $companyId]);
@@ -203,7 +198,6 @@ if (isset($_GET['edit'])) {
             </div>
             <div class="card-body">
                 <form method="POST">
-                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-group">
@@ -341,8 +335,7 @@ if (isset($_GET['edit'])) {
                                 <a href="site_detail.php?id=<?= $s['id'] ?>" class="btn btn-sm btn-view">View</a>
                                 <?php if ($isManager): ?>
                                 <a href="sites.php?edit=<?= $s['id'] ?>" class="btn btn-sm btn-edit">Edit</a>
-                                <form method="POST" style="display:inline" data-confirm="Delete this site?">
-                                    <?= csrf_field() ?>
+                                <form method="GET" style="display:inline" data-confirm="Delete this site?">
                                     <input type="hidden" name="delete" value="<?= $s['id'] ?>">
                                     <button class="btn btn-sm btn-delete">Del</button>
                                 </form>

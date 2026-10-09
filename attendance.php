@@ -54,7 +54,6 @@ if ($isManager) {
 $jobCodes = getJobCodes();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
-    require_csrf();
     if ($isManager) { flash('Only supervisors can mark attendance'); header('Location: attendance.php'); exit; }
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND id IN (" . siteIdsForSql($mySiteIds) . ")");
@@ -69,7 +68,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
-    require_csrf();
     if ($isManager) { flash('Only supervisors can edit attendance'); header('Location: attendance.php'); exit; }
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT a.id FROM attendance a JOIN sites s ON s.id = a.site_id WHERE a.id = ? AND s.id IN (" . siteIdsForSql($mySiteIds) . ")");
@@ -87,10 +85,10 @@ if (isset($_GET['delete'])) {
     if ($isManager) { flash('Only supervisors can delete attendance records'); header('Location: attendance.php'); exit; }
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT a.id FROM attendance a JOIN sites s ON s.id = a.site_id WHERE a.id = ? AND s.id IN (" . siteIdsForSql($mySiteIds) . ")");
-        $check->execute([$__aid]);
+        $check->execute([$_GET['delete']]);
         if (!$check->fetch()) { flash('Not your site'); header('Location: attendance.php'); exit; }
     }
-    $pdo->prepare("DELETE FROM attendance WHERE id = ?")->execute([$__aid]);
+    $pdo->prepare("DELETE FROM attendance WHERE id = ?")->execute([$_GET['delete']]);
     flash('Entry removed', 'warning');
     header('Location: attendance.php');
     exit;
@@ -218,7 +216,6 @@ foreach ($rows as $r) {
                     <div class="alert warning">You have no sites assigned.</div>
                 <?php else: ?>
                 <form method="POST">
-                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-row-3">

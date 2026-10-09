@@ -10,7 +10,6 @@ $error = '';
 $success = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    require_csrf();
     $company_name = trim($_POST['company_name'] ?? '');
     $email        = trim($_POST['email'] ?? '');
     $phone        = trim($_POST['phone'] ?? '');
@@ -182,7 +181,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <h1>Create Company</h1>
             <p class="subtitle">Register your company only. You will sign in as company, then create a Manager account.</p>
             <form method="POST" class="login-form" id="registerForm">
-                <?= csrf_field() ?>
                 <?php if ($error): ?>
                     <div class="alert error"><?= h($error) ?></div>
                 <?php endif; ?>
@@ -212,9 +210,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="strength-meter"><div id="strengthBar"></div></div>
                     <div class="strength-text" id="strengthText"></div>
                     <div class="req-list" id="reqList">
-                        <span id="reqUpper" class="bad">✗ Upper/lower</span>
                         <span id="reqLen" class="bad">✗ 8+ chars</span>
                         <span id="reqNum" class="bad">✗ Number</span>
+                        <span id="reqUpper" class="bad">✗ Upper/lower (optional)</span>
                     </div>
                 </div>
                 <div class="form-group">
@@ -249,13 +247,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if(upperOk) score++;
         if(v.length >= 12) score++;
         if(/[ !@#$%^&*]/.test(v)) score++;
-        // Update req list (order: Upper/lower, 8+ chars, Number) like manager login
-        reqUpper.className = upperOk ? 'ok' : 'bad';
-        reqUpper.textContent = (upperOk?'✓':'✗')+' Upper/lower';
+        // Update req list
         reqLen.className = lenOk ? 'ok' : 'bad';
         reqLen.textContent = (lenOk?'✓':'✗')+' 8+ chars';
         reqNum.className = numOk ? 'ok' : 'bad';
         reqNum.textContent = (numOk?'✓':'✗')+' Number';
+        reqUpper.className = upperOk ? 'ok' : 'bad';
+        reqUpper.textContent = (upperOk?'✓':'✗')+' Upper/lower';
         // Strength
         var width = '0', cls='', label='';
         if(v.length===0){ width='0'; label=''; }

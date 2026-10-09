@@ -125,7 +125,6 @@ $upcomingAssignments = $pdo->query($asgnSql)->fetchAll(PDO::FETCH_ASSOC);
             <?php endif; ?>
         </div>
 
-        
         <?php if ($isManager): ?>
         <!-- Manager Stats -->
         <div class="stats-grid">

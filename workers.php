@@ -23,7 +23,6 @@ if (!$isManager) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
-    require_csrf();
     if (!$isManager) { flash('Access denied'); header('Location: workers.php'); exit; }
     // verify site belongs to company
     if (!empty($_POST['current_site_id'])) {
@@ -43,22 +42,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     exit;
 }
 
-if (isset($_POST['delete']) || isset($_GET['delete'])) {
-    if ($_SERVER['REQUEST_METHOD']==='POST') { require_csrf(); } else { if (!validate_csrf($_GET['csrf'] ?? '')) { flash('Invalid token'); header('Location: workers.php'); exit; } }
-    $__del = (int)($_POST['delete'] ?? $_GET['delete']);
+if (isset($_GET['delete'])) {
     if (!$isManager) { flash('Access denied'); header('Location: workers.php'); exit; }
     // Ensure worker belongs to company
     $chk = $pdo->prepare("SELECT id FROM workers WHERE id = ? AND company_id = ?");
-    $chk->execute([$__del, $companyId]);
+    $chk->execute([$_GET['delete'], $companyId]);
     if (!$chk->fetch()) { flash('Access denied'); header('Location: workers.php'); exit; }
-    $pdo->prepare("DELETE FROM workers WHERE id = ? AND company_id = ?")->execute([$__del, $companyId]);
+    $pdo->prepare("DELETE FROM workers WHERE id = ? AND company_id = ?")->execute([$_GET['delete'], $companyId]);
     flash('Worker removed', 'warning');
     header('Location: workers.php');
     exit;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
-    require_csrf();
     if (!$isManager) { flash('Access denied'); header('Location: workers.php'); exit; }
     // Ensure worker belongs to company
     $chk = $pdo->prepare("SELECT id FROM workers WHERE id = ? AND company_id = ?");
@@ -193,7 +189,6 @@ if (isset($_GET['edit'])) {
             </div>
             <div class="card-body">
                 <form method="POST">
-                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-row">
@@ -306,8 +301,7 @@ if (isset($_GET['edit'])) {
                             <td class="actions">
                                 <?php if ($isManager): ?>
                                 <a href="workers.php?edit=<?= $w['id'] ?>" class="btn btn-sm btn-edit">Edit</a>
-                                <form method="POST" style="display:inline" data-confirm="Remove this worker?">
-                                    <?= csrf_field() ?>
+                                <form method="GET" style="display:inline" data-confirm="Remove this worker?">
                                     <input type="hidden" name="delete" value="<?= $w['id'] ?>">
                                     <button class="btn btn-sm btn-delete">Del</button>
                                 </form>

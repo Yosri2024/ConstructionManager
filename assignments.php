@@ -31,7 +31,6 @@ $workers = $workers->fetchAll(PDO::FETCH_ASSOC);
 
 // --- CREATE ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
-    require_csrf();
     // Supervisor: validate site belongs to them (via site_supervisors or legacy supervisor_id)
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = $companyId AND id IN (" . siteIdsForSql($mySiteIds) . ")");
@@ -164,7 +163,6 @@ $assignments = $assignments->fetchAll(PDO::FETCH_ASSOC);
                     <div class="alert warning">You have no sites assigned. Please contact the manager.</div>
                 <?php else: ?>
                 <form method="POST">
-                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="create">
                     <div class="form-row-3">
                         <div class="form-group">
@@ -241,18 +239,10 @@ $assignments = $assignments->fetchAll(PDO::FETCH_ASSOC);
                             <td><?= h($a['notes']) ?></td>
                             <td class="actions">
                                 <?php if ($isActive && ($isManager || $isSupervisor)): ?>
-                                <form method="POST" style="display:inline" data-confirm="End this assignment now?">
-                                <?= csrf_field() ?>
-                                <input type="hidden" name="end" value="<?= $a['id'] ?>">
-                                <button class="btn btn-sm btn-end">End</button>
-                            </form>
+                                <a href="assignments.php?end=<?= $a['id'] ?>" class="btn btn-sm btn-end" onclick="return confirm('End this assignment now?');">End</a>
                                 <?php endif; ?>
                                 <?php if ($isManager || $isSupervisor): ?>
-                                <form method="POST" style="display:inline" data-confirm="Delete this assignment?">
-                                <?= csrf_field() ?>
-                                <input type="hidden" name="delete" value="<?= $a['id'] ?>">
-                                <button class="btn btn-sm btn-delete">Del</button>
-                            </form>
+                                <a href="assignments.php?delete=<?= $a['id'] ?>" class="btn btn-sm btn-delete" onclick="return confirm('Delete this assignment?');">Del</a>
                                 <?php endif; ?>
                             </td>
                         </tr>

@@ -12,7 +12,7 @@ $mySiteIds = $isManager ? [] : getMySiteIds($user);
 // Approve action — MANAGER ONLY
 if (isset($_GET['approve'])) {
     if (!$isManager) { flash('Access denied'); header('Location: transfer_requests.php'); exit; }
-    
+    $reqId = (int)$_GET['approve'];
     $stmt = $pdo->prepare("SELECT tr.* FROM transfer_requests tr JOIN users u ON u.id = tr.requested_by WHERE tr.id = ? AND tr.status = 'pending' AND u.company_id = ?");
     $stmt->execute([$reqId, $companyId]);
     $req = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -46,7 +46,7 @@ if (isset($_GET['approve'])) {
 // Reject action — MANAGER ONLY
 if (isset($_GET['reject'])) {
     if (!$isManager) { flash('Access denied'); header('Location: transfer_requests.php'); exit; }
-    
+    $reqId = (int)$_GET['reject'];
     $stmt = $pdo->prepare("SELECT tr.* FROM transfer_requests tr JOIN users u ON u.id = tr.requested_by WHERE tr.id = ? AND tr.status = 'pending' AND u.company_id = ?");
     $stmt->execute([$reqId, $companyId]);
     $req = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -220,16 +220,8 @@ foreach ($pdo->query($countSQL) as $r) {
                             <td class="actions">
                                 <?php if ($r['status'] === 'pending' && $isManager): ?>
                                     <div class="actions-stack">
-                                        <form method="POST" style="display:inline">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="approve" value="<?= $r['id'] ?>">
-                                            <button class="btn btn-sm btn-approve" onclick="return confirm('Approve transfer? The worker will be moved to this site.')">✓ Approve</button>
-                                        </form>
-                                        <form method="POST" style="display:inline">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="reject" value="<?= $r['id'] ?>">
-                                            <button class="btn btn-sm btn-reject" onclick="return confirm('Reject this transfer request?')">✗ Reject</button>
-                                        </form>
+                                        <a href="?approve=<?= $r['id'] ?>" class="btn btn-sm btn-approve" onclick="return confirm('Approve transfer? The worker will be moved to this site.');">✓ Approve</a>
+                                        <a href="?reject=<?= $r['id'] ?>" class="btn btn-sm btn-reject" onclick="return confirm('Reject this transfer request?');">✗ Reject</a>
                                     </div>
                                 <?php else: ?>
                                 <span style="color:#9ca3af;font-size:11px">—</span>

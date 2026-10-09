@@ -1,55 +1,8 @@
 <?php
 // =============================================================
-// Database Configuration & Bootstrap - Multi-Tenant - SECURED
+// Database Configuration & Bootstrap - Multi-Tenant
 // =============================================================
-// --- Security: hide detailed errors in production ---
-$isLocalEnv = in_array($_SERVER['SERVER_NAME'] ?? '', ['localhost','127.0.0.1','::1']) || stripos($_SERVER['HTTP_HOST'] ?? '', 'localhost') !== false || PHP_SAPI === 'cli';
-if (!$isLocalEnv) {
-    ini_set('display_errors', '0');
-    ini_set('display_startup_errors', '0');
-    error_reporting(E_ALL & ~E_DEPRECATED & ~E_STRICT);
-} else {
-    ini_set('display_errors', '1');
-    error_reporting(E_ALL);
-}
-ini_set('log_errors', '1');
-ini_set('error_log', __DIR__ . '/data/php_errors.log');
-
-// --- Secure session ---
-if (session_status() === PHP_SESSION_NONE) {
-    $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (!empty($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443);
-    // Avoid "headers already sent" when config is included multiple times via various flows
-    if (!headers_sent()) {
-        session_set_cookie_params([
-            'lifetime' => 0,
-            'path'     => '/',
-            'domain'   => '',
-            'secure'   => $isSecure,
-            'httponly' => true,
-            'samesite' => 'Strict'
-        ]);
-    }
-    session_start();
-    // Prevent session fixation: regenerate periodically (every 30 min)
-    if (!isset($_SESSION['_last_regen']) || time() - $_SESSION['_last_regen'] > 1800) {
-        if (session_status() === PHP_SESSION_ACTIVE) {
-            session_regenerate_id(true);
-            $_SESSION['_last_regen'] = time();
-        }
-    }
-}
-
-// --- Security headers (also set in .htaccess - PHP fallback for InfinityFree) ---
-if (!headers_sent()) {
-    header('X-Content-Type-Options: nosniff');
-    header('X-Frame-Options: SAMEORIGIN');
-    header('X-XSS-Protection: 1; mode=block');
-    header('Referrer-Policy: strict-origin-when-cross-origin');
-    // Minimal CSP - adjust if you add external domains
-    // Allow self, inline styles/scripts needed by app, cdn for icons/tel input
-    // Comment out if it blocks your UI; .htaccess CSP is more permissive
-    // header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' https://cdn.jsdelivr.net data:;");
-}
+session_start();
 
 // Load local config override if it exists (for local DB credentials etc.)
 if (file_exists(__DIR__ . '/config.local.php')) {
@@ -59,80 +12,20 @@ if (file_exists(__DIR__ . '/config.local.php')) {
 // Load environment variables from .env file if it exists
 function loadEnv($path) {
     if (!file_exists($path)) return;
-    // Validate path is inside project (prevent path traversal if ever called with user input)
-    $real = realpath($path);
-    $base = realpath(__DIR__);
-    if ($real === false || $base === false || strpos($real, $base) !== 0) return;
     $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
     foreach ($lines as $line) {
-        $trim = trim($line);
-        if ($trim === '' || strpos($trim, '#') === 0) continue;
-        if (strpos($line, '=') === false) continue;
+        if (strpos(trim($line), '#') === 0) continue;
+        if (!strpos($line, '=')) continue;
         list($key, $value) = explode('=', $line, 2);
         $key = trim($key);
         $value = trim($value);
-        // Strip surrounding quotes if present (e.g. DB_PASS="secret pass")
-        if (strlen($value) >= 2 && (($value[0]==='"' && substr($value,-1)==='"') || ($value[0]==="'" && substr($value,-1)==="'"))) {
-            $value = substr($value,1,-1);
-        }
-        if ($key === '' || !preg_match('/^[A-Z_][A-Z0-9_]*$/', $key)) continue;
-        if (!getenv($key) && !isset($_ENV[$key])) {
+        if (!getenv($key)) {
             putenv("$key=$value");
             $_ENV[$key] = $value;
-            $_SERVER[$key] = $value;
         }
     }
 }
 loadEnv(__DIR__ . '/.env');
-
-// ===== CSRF & Security Helpers =====
-function csrf_token() {
-    if (empty($_SESSION['csrf_token'])) {
-        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-    }
-    return $_SESSION['csrf_token'];
-}
-function csrf_field() {
-    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
-}
-function validate_csrf($token) {
-    if (empty($_SESSION['csrf_token']) || empty($token)) return false;
-    return hash_equals($_SESSION['csrf_token'], $token);
-}
-function require_csrf() {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $tok = $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
-        if (!validate_csrf($tok)) {
-            http_response_code(403);
-            die('CSRF validation failed. Please refresh the page and try again.');
-        }
-    }
-}
-function sanitizeInput($data) {
-    if (is_array($data)) return array_map('sanitizeInput', $data);
-    $data = trim((string)$data);
-    // Note: stripslashes no longer needed in modern PHP; htmlspecialchars is for output, not input
-    return $data;
-}
-function e($str) { // shorthand for h()
-    return htmlspecialchars($str ?? '', ENT_QUOTES, 'UTF-8');
-}
-// Rate limiting: simple per-session throttle for logins
-function check_rate_limit($key, $max=5, $window=300) {
-    $now = time();
-    if (!isset($_SESSION['_rate'][$key])) $_SESSION['_rate'][$key] = [];
-    // purge old
-    $_SESSION['_rate'][$key] = array_filter($_SESSION['_rate'][$key], function($t) use ($now,$window){ return ($now - $t) < $window; });
-    if (count($_SESSION['_rate'][$key]) >= $max) return false;
-    $_SESSION['_rate'][$key][] = $now;
-    return true;
-}
-function secure_session_regenerate() {
-    if (session_status() === PHP_SESSION_ACTIVE) {
-        session_regenerate_id(true);
-        $_SESSION['_last_regen'] = time();
-    }
-}
 
 // Database mode: 'sqlite' (default, local) or 'mysql' (production)
 define('DB_MODE', getenv('DB_MODE') ?: 'sqlite');
@@ -205,24 +98,14 @@ function connectMySQL() {
 }
 
 function initSchemaMySQL($pdo) {
-    // MySQL schema is loaded from database_mysql.sql — only if file is inside project dir
+    // MySQL schema is loaded from database_mysql.sql
     $sqlFile = __DIR__ . '/database_mysql.sql';
     if (file_exists($sqlFile)) {
-        $real = realpath($sqlFile);
-        $base = realpath(__DIR__);
-        if ($real === false || $base === false || strpos($real, $base) !== 0) {
-            error_log("Blocked initSchemaMySQL: file outside project dir");
-            $GLOBALS['DB_FIRST_RUN'] = false;
-            return;
-        }
         $sql = file_get_contents($sqlFile);
-        // Remove SQL file from web access after use note is logged
         // Split by semicolons and execute each statement
         $statements = array_filter(array_map('trim', explode(';', $sql)));
         foreach ($statements as $stmt) {
             if (empty($stmt) || strpos($stmt, '--') === 0) continue;
-            // Skip risky statements that shouldn't run via PHP
-            if (preg_match('/^(CREATE\s+DATABASE|USE\s+)/i', $stmt)) continue;
             try {
                 $pdo->exec($stmt);
             } catch (Exception $e) {
@@ -293,13 +176,9 @@ function migrateMySQL($pdo) {
         $pdo->prepare("INSERT INTO _migrations (name) VALUES (?)")->execute(['add_company_auth']);
     }
 
-    // MySQL equivalent of site_supervisors sync (safe on every request)
-    // Ensure site_supervisors table exists first
-    $hasSS = $pdo->query("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'site_supervisors'")->fetchColumn();
-    if ($hasSS) {
-        $pdo->exec("INSERT IGNORE INTO site_supervisors (site_id, user_id) SELECT id, supervisor_id FROM sites WHERE supervisor_id IS NOT NULL");
-        $pdo->exec("DELETE FROM site_supervisors WHERE site_id NOT IN (SELECT id FROM sites) OR user_id NOT IN (SELECT id FROM users)");
-    }
+    // MySQL equivalent of site_supervisors sync (runs on every request)
+    $pdo->exec("INSERT IGNORE INTO site_supervisors (site_id, user_id) SELECT id, supervisor_id FROM sites WHERE supervisor_id IS NOT NULL");
+    $pdo->exec("DELETE FROM site_supervisors WHERE site_id NOT IN (SELECT id FROM sites) OR user_id NOT IN (SELECT id FROM users)");
 
     // Migration: add transfer_requests table
     if (!$hasMigration('add_transfer_requests')) {

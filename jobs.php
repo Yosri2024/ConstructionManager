@@ -6,7 +6,6 @@ $pdo = getDB();
 $companyId = getCurrentCompanyId();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
-    require_csrf();
     // Check code unique per company
     $chk = $pdo->prepare("SELECT id FROM jobs WHERE company_id = ? AND code = ?");
     $chk->execute([$companyId, trim($_POST['code'])]);
@@ -18,15 +17,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     exit;
 }
 
-if (isset($_POST['delete']) || isset($_GET['delete'])) {
-    if ($_SERVER['REQUEST_METHOD']==='POST') { require_csrf(); } else { if (!validate_csrf($_GET['csrf'] ?? '')) { flash('Invalid token'); header('Location: jobs.php'); exit; } }
-    $__jid = (int)($_POST['delete'] ?? $_GET['delete']);
+if (isset($_GET['delete'])) {
     // Ensure job belongs to company
     $chk = $pdo->prepare("SELECT id FROM jobs WHERE id = ? AND company_id = ?");
-    $chk->execute([$__jid, $companyId]);
+    $chk->execute([$_GET['delete'], $companyId]);
     if ($chk->fetch()) {
         $stmt = $pdo->prepare("DELETE FROM jobs WHERE id = ? AND company_id = ?");
-        $stmt->execute([$__jid, $companyId]);
+        $stmt->execute([$_GET['delete'], $companyId]);
         flash('Job deleted', 'warning');
     } else {
         flash('Access denied or job not found');
@@ -36,7 +33,6 @@ if (isset($_POST['delete']) || isset($_GET['delete'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
-    require_csrf();
     // Verify ownership
     $chk = $pdo->prepare("SELECT id FROM jobs WHERE id = ? AND company_id = ?");
     $chk->execute([$_POST['id'], $companyId]);
@@ -115,7 +111,6 @@ if (isset($_GET['edit'])) {
             </div>
             <div class="card-body">
                 <form method="POST">
-                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-row">
@@ -195,8 +190,7 @@ if (isset($_GET['edit'])) {
                             <td class="actions">
                                 <a href="jobs.php?edit=<?= $j['id'] ?>" class="btn btn-sm btn-edit">Edit</a>
                                 <a href="job_detail.php?id=<?= $j['id'] ?>" class="btn btn-sm btn-view">View</a>
-                                <form method="POST" style="display:inline" data-confirm="Delete this job?">
-                                    <?= csrf_field() ?>
+                                <form method="GET" style="display:inline" data-confirm="Delete this job?">
                                     <input type="hidden" name="delete" value="<?= $j['id'] ?>">
                                     <button class="btn btn-sm btn-delete">Delete</button>
                                 </form>

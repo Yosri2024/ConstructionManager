@@ -41,7 +41,6 @@ if ($isManager) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
-    require_csrf();
     // Validate site and worker belong to same company
     $chkSite = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
     $chkSite->execute([$_POST['site_id'], $companyId]);
@@ -68,7 +67,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
-    require_csrf();
     // Supervisor-only validation: can only edit hours for own sites
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT wh.id FROM work_hours wh JOIN sites s ON s.id = wh.site_id WHERE wh.id = ? AND s.supervisor_id = ?");
@@ -87,16 +85,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit'
     exit;
 }
 
-if (isset($_POST['delete']) || isset($_GET['delete'])) {
-    $__hid = (int)($_POST['delete'] ?? $_GET['delete']);
-    if ($_SERVER['REQUEST_METHOD']==='POST') { require_csrf(); } else { if (!validate_csrf($_GET['csrf'] ?? '')) { flash('Invalid token'); header('Location: hours.php'); exit; } }
+if (isset($_GET['delete'])) {
     // Supervisor-only validation: can only delete own site hours
     if ($isSupervisor) {
         $check = $pdo->prepare("SELECT wh.id FROM work_hours wh JOIN sites s ON s.id = wh.site_id WHERE wh.id = ? AND s.supervisor_id = ?");
-        $check->execute([$__hid, $user['id']]);
+        $check->execute([$_GET['delete'], $user['id']]);
         if (!$check->fetch()) { flash('You can only delete hours for your own sites'); header('Location: hours.php'); exit; }
     }
-    $pdo->prepare("DELETE FROM work_hours WHERE id = ?")->execute([$__hid]);
+    $pdo->prepare("DELETE FROM work_hours WHERE id = ?")->execute([$_GET['delete']]);
     flash('Hours entry removed', 'warning');
     header('Location: hours.php');
     exit;
@@ -193,7 +189,6 @@ foreach ($hours as $h) {
                     <div class="alert warning">You have no sites assigned. Please contact the manager.</div>
                 <?php else: ?>
                 <form method="POST">
-                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="<?= $editing ? 'edit' : 'create' ?>">
                     <?php if ($editing): ?><input type="hidden" name="id" value="<?= $editing['id'] ?>"><?php endif; ?>
                     <div class="form-row">
@@ -301,8 +296,7 @@ foreach ($hours as $h) {
                                 <td><small><?= h($h['entered_by_name']) ?></small></td>
                                 <td class="actions">
                                     <a href="hours.php?edit=<?= $h['id'] ?>" class="btn btn-sm btn-edit">Edit</a>
-                                    <form method="POST" style="display:inline" data-confirm="Remove this hours entry?">
-                                        <?= csrf_field() ?>
+                                    <form method="GET" style="display:inline" data-confirm="Remove this hours entry?">
                                         <input type="hidden" name="delete" value="<?= $h['id'] ?>">
                                         <button class="btn btn-sm btn-delete">×</button>
                                     </form>

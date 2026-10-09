@@ -26,7 +26,6 @@ if ($isManager) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
-    require_csrf();
     if ($isManager) { flash('Only supervisors can submit daily reports'); header('Location: reports.php'); exit; }
     // Validate site belongs to company and supervisor has access
     $chkSiteComp = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND company_id = ?");
@@ -48,12 +47,12 @@ if (isset($_GET['delete'])) {
     // Supervisors can only delete their own site's reports, always check company
     $mySiteIdsForDelete = getMySiteIds($user);
     $stmt = $pdo->prepare("SELECT dr.id, dr.site_id, s.company_id FROM daily_reports dr JOIN sites s ON s.id = dr.site_id WHERE dr.id = ? AND s.company_id = ?");
-    $stmt->execute([$__repDel, $companyId]);
+    $stmt->execute([$_GET['delete'], $companyId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$row) { flash('Report not found'); header('Location: reports.php'); exit; }
     $canDelete = $isManager || in_array($row['site_id'], $mySiteIdsForDelete);
     if (!$canDelete) { flash('Access denied'); header('Location: reports.php'); exit; }
-    $pdo->prepare("DELETE FROM daily_reports WHERE id = ?")->execute([$__repDel]);
+    $pdo->prepare("DELETE FROM daily_reports WHERE id = ?")->execute([$_GET['delete']]);
     flash('Report deleted', 'warning');
     header('Location: reports.php');
     exit;
@@ -121,7 +120,6 @@ $reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <div class="alert warning">You have no sites assigned. Please contact the manager.</div>
                 <?php else: ?>
                 <form method="POST">
-                    <?= csrf_field() ?>
                     <input type="hidden" name="action" value="create">
                     <div class="form-row">
                         <div class="form-group">

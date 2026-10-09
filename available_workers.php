@@ -80,7 +80,6 @@ foreach ($pendingRows as $pr) {
 
 // Submit transfer request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assign') {
-    require_csrf();
     $workerId = (int)$_POST['worker_id'];
     $toSiteId = (int)$_POST['site_id'];
     $notes = trim($_POST['notes'] ?? '');
@@ -206,7 +205,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assig
                                     </span>
                                 <?php else: ?>
                                 <form method="POST" class="form-row-inline">
-                    <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="assign">
                                     <input type="hidden" name="worker_id" value="<?= $w['id'] ?>">
                                     <select name="site_id" required class="transfer-select">
@@ -270,7 +268,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assig
                                     </span>
                                 <?php else: ?>
                                 <form method="POST" class="form-row-inline">
-                    <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="assign">
                                     <input type="hidden" name="worker_id" value="<?= $w['id'] ?>">
                                     <select name="site_id" required class="transfer-select">
@@ -333,7 +330,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'assig
                                     </span>
                                 <?php else: ?>
                                 <form method="POST" class="form-row-inline">
-                    <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="assign">
                                     <input type="hidden" name="worker_id" value="<?= $w['id'] ?>">
                                     <select name="site_id" required class="transfer-select">
